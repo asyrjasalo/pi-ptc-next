@@ -1,4 +1,4 @@
-import { spawn, exec } from "child_process";
+import { spawn, exec, execSync } from "child_process";
 import { promisify } from "util";
 import type { SandboxManager } from "./types";
 
@@ -8,96 +8,14 @@ const EXECUTION_TIMEOUT = 270_000; // 4.5 minutes in milliseconds
 
 /**
  * Subprocess-based sandbox implementation
- * Executes Python code in a local subprocess with timeout and cancellation support
+ * Executes Python code in a local subprocess
  */
 class SubprocessSandbox implements SandboxManager {
-  async execute(code: string, cwd: string, signal?: AbortSignal): Promise<string> {
-    return new Promise((resolve, reject) => {
-      // Spawn Python process with unbuffered output
-      const proc = spawn("python3", ["-u", "-c", code], {
-        cwd,
-        env: { ...process.env },
-      });
-
-      let stdout = "";
-      let stderr = "";
-      let killed = false;
-
-      // Set up timeout
-      const timeoutId = setTimeout(() => {
-        if (!killed) {
-          killed = true;
-          proc.kill("SIGTERM");
-          setTimeout(() => {
-            if (proc.exitCode === null) {
-              proc.kill("SIGKILL");
-            }
-          }, 5000);
-          reject(new Error(`Execution timed out after ${EXECUTION_TIMEOUT / 1000} seconds`));
-        }
-      }, EXECUTION_TIMEOUT);
-
-      // Handle abort signal
-      const abortHandler = () => {
-        if (!killed) {
-          killed = true;
-          clearTimeout(timeoutId);
-          proc.kill("SIGTERM");
-          setTimeout(() => {
-            if (proc.exitCode === null) {
-              proc.kill("SIGKILL");
-            }
-          }, 5000);
-          reject(new Error("Execution aborted"));
-        }
-      };
-
-      if (signal) {
-        if (signal.aborted) {
-          proc.kill("SIGTERM");
-          reject(new Error("Execution aborted"));
-          return;
-        }
-        signal.addEventListener("abort", abortHandler, { once: true });
-      }
-
-      // Capture stdout and stderr
-      proc.stdout.on("data", (data) => {
-        stdout += data.toString();
-      });
-
-      proc.stderr.on("data", (data) => {
-        stderr += data.toString();
-      });
-
-      // Handle process exit
-      proc.on("exit", (code, signal_name) => {
-        clearTimeout(timeoutId);
-        if (signal) {
-          signal.removeEventListener("abort", abortHandler);
-        }
-
-        if (killed) {
-          return; // Already handled in timeout/abort
-        }
-
-        if (code === 0) {
-          resolve(stdout);
-        } else {
-          const errorMsg = stderr || stdout || `Process exited with code ${code}`;
-          reject(new Error(errorMsg));
-        }
-      });
-
-      proc.on("error", (err) => {
-        clearTimeout(timeoutId);
-        if (signal) {
-          signal.removeEventListener("abort", abortHandler);
-        }
-        if (!killed) {
-          reject(new Error(`Failed to spawn Python process: ${err.message}`));
-        }
-      });
+  spawn(code: string, cwd: string): import("child_process").ChildProcess {
+    // Spawn Python process with unbuffered output
+    return spawn("python3", ["-u", "-c", code], {
+      cwd,
+      env: { ...process.env },
     });
   }
 
@@ -134,38 +52,6 @@ class DockerSandbox implements SandboxManager {
     }
   }
 
-  private async getOrCreateContainer(cwd: string): Promise<string> {
-    // Reuse existing container if still valid
-    if (this.containerId && Date.now() - this.lastUsed < EXECUTION_TIMEOUT) {
-      this.lastUsed = Date.now();
-      return this.containerId;
-    }
-
-    // Clean up old container if exists
-    if (this.containerId) {
-      await this.stopContainer();
-    }
-
-    // Create new container
-    const containerName = `pi-ptc-${this.sessionId}-${Date.now()}`;
-
-    try {
-      const { stdout } = await execAsync(
-        `docker run -d --rm --network none --name ${containerName} ` +
-        `-v "${cwd}:/workspace:ro" ` +
-        `--memory 512m --cpus 1.0 ` +
-        `python:3.12-slim tail -f /dev/null`
-      );
-
-      this.containerId = stdout.trim();
-      this.lastUsed = Date.now();
-      return this.containerId;
-    } catch (error) {
-      throw new Error(
-        `Failed to create Docker container: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  }
 
   private async stopContainer() {
     if (!this.containerId) return;
@@ -180,85 +66,43 @@ class DockerSandbox implements SandboxManager {
     this.containerId = null;
   }
 
-  async execute(code: string, cwd: string, signal?: AbortSignal): Promise<string> {
-    const containerId = await this.getOrCreateContainer(cwd);
-
-    return new Promise((resolve, reject) => {
-      // Execute Python code in container
-      const proc = spawn("docker", ["exec", "-i", containerId, "python3", "-u", "-c", code], {
-        cwd,
-      });
-
-      let stdout = "";
-      let stderr = "";
-      let killed = false;
-
-      // Set up timeout
-      const timeoutId = setTimeout(() => {
-        if (!killed) {
-          killed = true;
-          proc.kill("SIGTERM");
-          reject(new Error(`Execution timed out after ${EXECUTION_TIMEOUT / 1000} seconds`));
+  spawn(code: string, cwd: string): import("child_process").ChildProcess {
+    try {
+      // Check if we need to create a new container
+      if (!this.containerId || Date.now() - this.lastUsed > EXECUTION_TIMEOUT) {
+        // Stop old container if it exists
+        if (this.containerId) {
+          try {
+            execSync(`docker stop ${this.containerId}`, { stdio: "ignore" });
+          } catch {
+            // Container might already be stopped
+          }
+          this.containerId = null;
         }
-      }, EXECUTION_TIMEOUT);
 
-      // Handle abort signal
-      const abortHandler = () => {
-        if (!killed) {
-          killed = true;
-          clearTimeout(timeoutId);
-          proc.kill("SIGTERM");
-          reject(new Error("Execution aborted"));
-        }
-      };
-
-      if (signal) {
-        if (signal.aborted) {
-          proc.kill("SIGTERM");
-          reject(new Error("Execution aborted"));
-          return;
-        }
-        signal.addEventListener("abort", abortHandler, { once: true });
+        // Create new container
+        const containerName = `pi-ptc-${this.sessionId}-${Date.now()}`;
+        const output = execSync(
+          `docker run -d --rm --network none --name ${containerName} ` +
+          `-v "${cwd}:/workspace:ro" ` +
+          `--memory 512m --cpus 1.0 ` +
+          `python:3.12-slim tail -f /dev/null`,
+          { encoding: "utf-8" }
+        );
+        this.containerId = output.trim();
       }
 
-      // Capture stdout and stderr
-      proc.stdout.on("data", (data) => {
-        stdout += data.toString();
+      this.lastUsed = Date.now();
+
+      // Execute Python code in container
+      return spawn("docker", ["exec", "-i", this.containerId, "python3", "-u", "-c", code], {
+        cwd,
       });
-
-      proc.stderr.on("data", (data) => {
-        stderr += data.toString();
-      });
-
-      // Handle process exit
-      proc.on("exit", (code) => {
-        clearTimeout(timeoutId);
-        if (signal) {
-          signal.removeEventListener("abort", abortHandler);
-        }
-
-        if (killed) {
-          return; // Already handled in timeout/abort
-        }
-
-        if (code === 0) {
-          resolve(stdout);
-        } else {
-          const errorMsg = stderr || stdout || `Process exited with code ${code}`;
-          reject(new Error(errorMsg));
-        }
-      });
-
-      proc.on("error", (err) => {
-        clearTimeout(timeoutId);
-        if (signal) {
-          signal.removeEventListener("abort", abortHandler);
-        }
-        if (!killed) {
-          reject(new Error(`Failed to execute in Docker: ${err.message}`));
-        }
-      });
-    });
+    } catch (error) {
+      throw new Error(
+        `Failed to create/use Docker container: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
   async cleanup(): Promise<void> {
@@ -283,17 +127,23 @@ async function isDockerAvailable(): Promise<boolean> {
 }
 
 /**
- * Create a sandbox manager (tries Docker first, falls back to subprocess)
+ * Create a sandbox manager (uses subprocess by default, Docker opt-in via PTC_USE_DOCKER=true)
  */
 export async function createSandbox(): Promise<SandboxManager> {
-  const dockerAvailable = await isDockerAvailable();
   const sessionId = Math.random().toString(36).substring(7);
+  const useDocker = process.env.PTC_USE_DOCKER === "true";
 
-  if (dockerAvailable) {
-    console.log("[PTC] Using Docker sandbox");
-    return new DockerSandbox(sessionId);
+  if (useDocker) {
+    const dockerAvailable = await isDockerAvailable();
+    if (dockerAvailable) {
+      console.log("[PTC] Using Docker sandbox (PTC_USE_DOCKER=true)");
+      return new DockerSandbox(sessionId);
+    } else {
+      console.log("[PTC] Docker requested but not available, falling back to subprocess sandbox");
+      return new SubprocessSandbox();
+    }
   } else {
-    console.log("[PTC] Docker not available, using subprocess sandbox");
+    console.log("[PTC] Using subprocess sandbox (default)");
     return new SubprocessSandbox();
   }
 }

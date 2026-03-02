@@ -31,14 +31,14 @@ Restart pi-coding-agent. The `code_execution` tool is now available.
 - **Reduced Token Usage**: Intermediate tool results don't consume context
 - **Lower Latency**: Single LLM round-trip instead of multiple
 - **Complex Workflows**: Enable sophisticated multi-tool logic with loops, conditionals, and data aggregation
-- **Isolation**: Runs in Docker containers (or subprocess fallback) for security
+- **Optional Isolation**: Docker containers available for additional security (opt-in)
 
 ## Prerequisites
 
 - Node.js 18+
 - Python 3.12+ (must be available as `python3`)
 - [pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) installed
-- Docker (optional, see [Docker Isolation](#docker-isolation) below)
+- Docker (optional, see [Execution Modes](#execution-modes) below)
 
 ## Installation
 
@@ -197,28 +197,41 @@ Extension returns final output to LLM
 - **Python Runtime (`src/python-runtime/runtime.py`)**: Python execution environment
 - **Tool Loader (`src/tool-loader.ts`)**: Discovers and loads custom tools from `tools/`
 
-### Docker Isolation
+### Execution Modes
 
-The extension automatically detects whether Docker is available. If it is, code runs in an isolated container. Otherwise it falls back to a local subprocess.
+The extension runs Python code in a local subprocess by default. Docker isolation is available as an opt-in feature.
 
-**Docker mode** (preferred):
+**Subprocess mode** (default):
 
-- Requires Docker to be installed and the daemon running (`docker --version` and `docker ps` should both succeed)
-- Uses the `python:3.12-slim` image — pull it ahead of time to avoid a slow first run:
-  ```bash
-  docker pull python:3.12-slim
-  ```
-- Each execution runs inside a container with:
-  - **Network disabled** (`--network none`) — code cannot make outbound requests
-  - **Workspace mounted read-only** (`-v "$CWD:/workspace:ro"`)
-  - **Resource limits**: 512 MB RAM, 1 CPU
-- Containers are reused across executions for lower latency and automatically cleaned up after 4.5 minutes of inactivity
-
-**Subprocess mode** (fallback):
-
-- Used automatically when Docker is not available
 - Spawns a `python3` subprocess in the current working directory
-- No network or filesystem isolation — suitable for trusted environments
+- No additional isolation beyond subprocess boundaries
+- Simple setup with no external dependencies
+- Suitable for trusted environments where you control the code generation
+
+**Docker mode** (opt-in):
+
+To enable Docker isolation, set the environment variable:
+```bash
+export PTC_USE_DOCKER=true
+```
+
+Then ensure Docker is installed and running:
+```bash
+# Verify Docker is available
+docker --version
+docker ps
+
+# Pull the Python image (optional, avoids slow first run)
+docker pull python:3.12-slim
+```
+
+When enabled, each execution runs inside a container with:
+- **Network disabled** (`--network none`) — code cannot make outbound requests
+- **Workspace mounted read-only** (`-v "$CWD:/workspace:ro"`)
+- **Resource limits**: 512 MB RAM, 1 CPU
+- **Container reuse**: Same container used for multiple executions within 4.5 minutes
+
+**Note**: Docker isolation provides defense-in-depth but doesn't prevent malicious code from using tools (like `bash`) to affect your system, since tool execution happens on the host via RPC.
 
 ### Execution Limits
 

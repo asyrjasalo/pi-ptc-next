@@ -10,11 +10,16 @@ export interface CustomToolDefinition {
   execute: ToolDefinition<any, any>["execute"];
 }
 
+export interface LoadedTool {
+  tool: CustomToolDefinition;
+  filename: string;
+}
+
 /**
  * Load custom tool definitions from the tools/ directory.
  * Each .js file should have a default export matching CustomToolDefinition.
  */
-export async function loadTools(extensionRoot: string): Promise<CustomToolDefinition[]> {
+export async function loadTools(extensionRoot: string): Promise<LoadedTool[]> {
   const toolsDir = path.join(extensionRoot, "tools");
 
   if (!fs.existsSync(toolsDir)) {
@@ -27,7 +32,7 @@ export async function loadTools(extensionRoot: string): Promise<CustomToolDefini
     return [];
   }
 
-  const tools: CustomToolDefinition[] = [];
+  const results: LoadedTool[] = [];
 
   for (const file of files) {
     const filePath = path.join(toolsDir, file);
@@ -42,16 +47,16 @@ export async function loadTools(extensionRoot: string): Promise<CustomToolDefini
         continue;
       }
 
-      tools.push(def);
+      results.push({ tool: def, filename: file });
       console.log(`[PTC] Loaded custom tool: ${def.name}`);
     } catch (err) {
       console.warn(`[PTC] Failed to load tool from ${file}:`, err);
     }
   }
 
-  if (tools.length > 0) {
-    console.log(`[PTC] ${tools.length} custom tool(s) loaded from tools/`);
+  if (results.length > 0) {
+    console.log(`[PTC] ${results.length} custom tool(s) loaded from tools/`);
   }
 
-  return tools;
+  return results;
 }

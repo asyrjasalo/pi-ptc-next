@@ -7,11 +7,13 @@ import { CodeExecutor } from "./code-executor";
 import { createSandbox } from "./sandbox-manager";
 import { ToolRegistry } from "./tool-registry";
 import { loadTools } from "./tool-loader";
+import { watchTools } from "./tool-watcher";
 import type { SandboxManager, ExecutionDetails } from "./types";
 
 let sandboxManager: SandboxManager | null = null;
 let codeExecutor: CodeExecutor | null = null;
 let toolRegistry: ToolRegistry | null = null;
+let toolWatcher: { close(): void } | null = null;
 
 /**
  * Render Python code with current line highlighting during execution
@@ -71,8 +73,9 @@ export default async function ptcExtension(pi: ExtensionAPI, context: ExtensionC
   const extensionRoot = __dirname.endsWith("/dist") || __dirname.endsWith("\\dist")
     ? __dirname.replace(/[/\\]dist$/, "")
     : __dirname;
-  const customTools = await loadTools(extensionRoot);
-  for (const tool of customTools) {
+  const loadedTools = await loadTools(extensionRoot);
+  const initialFileMap = new Map<string, string>();
+  for (const { tool, filename } of loadedTools) {
     pi.registerTool({
       name: tool.name,
       label: tool.label || tool.name,
@@ -80,7 +83,11 @@ export default async function ptcExtension(pi: ExtensionAPI, context: ExtensionC
       parameters: tool.parameters,
       execute: tool.execute,
     });
+    initialFileMap.set(filename, tool.name);
   }
+
+  // Start watching tools/ for hot-reload
+  toolWatcher = watchTools(extensionRoot, pi, toolRegistry, initialFileMap);
 
   // Register the code_execution tool
   pi.registerTool({
@@ -104,10 +111,10 @@ Key features:
 - All tools available as async Python functions
 - Multi-tool workflows execute in a single round-trip
 - Reduced token usage and latency
-- Isolated execution environment (Docker or subprocess)
+- Subprocess execution (Docker isolation available via PTC_USE_DOCKER=true)
 - 4.5 minute timeout
 
-The code runs in an isolated Python 3.12 environment. Use standard Python libraries and async/await syntax.`,
+The code runs in a Python 3.12 subprocess. Use standard Python libraries and async/await syntax.`,
     parameters: Type.Object({
       code: Type.String({
         description: "Python code to execute. Can use await to call any available tool.",
@@ -165,6 +172,10 @@ The code runs in an isolated Python 3.12 environment. Use standard Python librar
 
   // Register cleanup on session shutdown
   pi.on("session_shutdown", async () => {
+    if (toolWatcher) {
+      toolWatcher.close();
+      toolWatcher = null;
+    }
     if (sandboxManager) {
       await sandboxManager.cleanup();
       sandboxManager = null;

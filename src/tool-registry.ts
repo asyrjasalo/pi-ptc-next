@@ -30,6 +30,13 @@ export class ToolRegistry {
   }
 
   /**
+   * Remove a tool from the registry by name
+   */
+  removeTool(name: string): boolean {
+    return this.tools.delete(name);
+  }
+
+  /**
    * Get all registered tools
    */
   getAllTools(): ToolInfo[] {

@@ -7,7 +7,7 @@
 export default {
   name: "get_weather",
   label: "Get Weather",
-  description: "Get the current weather for a location. Simulates a slow API call (5 seconds).",
+  description: "Get the current weather for a location. Simulates a slow API call (10 seconds).",
   parameters: {
     type: "object",
     properties: {
@@ -20,7 +20,7 @@ export default {
   },
   execute: async (toolCallId, { location }, signal) => {
     // Simulate slow API call
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await new Promise((resolve) => setTimeout(resolve, 10000));
 
     // Check if aborted during wait
     if (signal?.aborted) {

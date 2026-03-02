@@ -1,14 +1,15 @@
 import type { ToolDefinition, ToolInfo as ExtensionToolInfo } from "@mariozechner/pi-coding-agent";
 
+import type { ChildProcess } from "child_process";
+
 export interface SandboxManager {
   /**
-   * Execute Python code in an isolated sandbox
+   * Spawn a Python process in the sandbox for RPC communication
    * @param code Python code to execute
    * @param cwd Current working directory
-   * @param signal Optional abort signal for cancellation
-   * @returns Stdout from Python execution
+   * @returns ChildProcess for bidirectional communication
    */
-  execute(code: string, cwd: string, signal?: AbortSignal): Promise<string>;
+  spawn(code: string, cwd: string): ChildProcess;
 
   /**
    * Cleanup sandbox resources

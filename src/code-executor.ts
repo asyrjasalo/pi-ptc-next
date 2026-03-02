@@ -4,7 +4,6 @@ import type { ToolRegistry } from "./tool-registry";
 import { generateToolWrappers } from "./tool-wrapper";
 import { RpcProtocol } from "./rpc-protocol";
 import { truncateOutput, formatPythonError } from "./utils";
-import { spawn } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -67,11 +66,8 @@ import asyncio
 asyncio.run(_runtime_main(user_main))
 `;
 
-    // Spawn Python process
-    const proc = spawn("python3", ["-u", "-c", combinedCode], {
-      cwd,
-      env: { ...process.env },
-    });
+    // Spawn Python process using sandbox manager
+    const proc = this.sandboxManager.spawn(combinedCode, cwd);
 
     // Set up RPC protocol
     const rpc = new RpcProtocol(
