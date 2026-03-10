@@ -1,6 +1,6 @@
 {
-  "name": "@pi-coding-agent/ptc",
-  "version": "0.1.0",
+  "name": "@cegersdo/pi-ptc",
+  "version": "0.1.1",
   "description": "Programmatic Tool Calling (PTC) extension for pi-coding-agent - enables Python code execution with async tool calls",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
