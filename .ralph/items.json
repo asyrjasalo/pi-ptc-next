@@ -64,7 +64,7 @@
         "Verify each result record includes case_id, observed_first_path, success, recovery_attempted, failure_class, total_tokens, and duration_ms.",
         "Verify baseline comparison reports routing or recovery regressions without mutating source planning docs."
       ],
-      "passes": false,
+      "passes": true,
       "regression_notes": ""
     },
     {
