@@ -7,7 +7,10 @@ import { CustomToolManager } from "./custom-tool-manager";
 import { buildCodeExecutionRecoveryPrompt, classifyCodeExecutionFailure } from "./recovery-classifier";
 import {
   armAutomaticRecovery,
+  buildPtcExecutionTelemetry,
+  buildPtcRecoveryDetails,
   createPtcRecoveryState,
+  noteAutomaticRouting,
   noteCodeExecutionAttempt,
   noteCodeExecutionFailure,
   noteCodeExecutionSuccess,
@@ -180,7 +183,11 @@ function buildCodeExecutionTool(
         noteCodeExecutionSuccess(recoveryState);
         return {
           content: [{ type: "text" as const, text: result.output || "(No output)" }],
-          details: result.details,
+          details: {
+            ...result.details,
+            telemetry: buildPtcExecutionTelemetry(recoveryState),
+            recovery: buildPtcRecoveryDetails(recoveryState),
+          },
         };
       } catch (error) {
         if (error instanceof PtcPythonError) {
@@ -243,6 +250,8 @@ function applyAutoRouting(
   if (!allTools.some((tool) => tool.name === "code_execution")) {
     return undefined;
   }
+
+  noteAutomaticRouting(getRequestRecoveryState(sessionState));
 
   const activeTools = pi.getActiveTools();
   const routableToolNames = new Set(toolRegistry.getAutoRoutableToolNames(sessionState.currentCwd, settings));

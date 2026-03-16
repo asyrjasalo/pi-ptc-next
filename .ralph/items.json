@@ -42,7 +42,7 @@
         "Execute a non-recovered request and verify telemetry still records first-path, attempt count, and terminal state.",
         "Verify no new persistent telemetry artifact is written outside benchmark result files."
       ],
-      "passes": false,
+      "passes": true,
       "regression_notes": ""
     },
     {

@@ -347,6 +347,8 @@ test("ptc extension resets recovery state for each user request", async () => {
     const firstRequestState = seenStates[0];
     assert.equal(seenStates[1], firstRequestState);
     assert.deepEqual(firstRequestState, {
+      autoRouted: false,
+      firstToolPath: "code_execution",
       routedToCodeExecution: true,
       codeExecutionAttempts: 2,
       recoveryAttempted: false,
@@ -361,6 +363,8 @@ test("ptc extension resets recovery state for each user request", async () => {
     const secondRequestState = seenStates[2];
     assert.notEqual(secondRequestState, firstRequestState);
     assert.deepEqual(secondRequestState, {
+      autoRouted: false,
+      firstToolPath: "code_execution",
       routedToCodeExecution: true,
       codeExecutionAttempts: 1,
       recoveryAttempted: false,
@@ -623,6 +627,275 @@ test("ptc extension does not append a second automatic recovery message after re
     } else {
       process.env.PTC_AUTO_RECOVER = previousAutoRecover;
     }
+    restoreSandbox();
+    restoreManager();
+    restoreRegistry();
+    restoreExecutor();
+    delete require.cache[require.resolve("../dist/index.js")];
+  }
+});
+
+test("ptc extension includes recovery telemetry in successful code_execution details after one bounded retry", async () => {
+  const previousAutoRecover = process.env.PTC_AUTO_RECOVER;
+  process.env.PTC_AUTO_RECOVER = "true";
+
+  const { PtcPythonError } = require("../dist/execution/execution-errors.js");
+
+  const sandbox = {
+    async cleanup() {},
+    spawn() {
+      throw new Error("sandbox spawn should not be used in recovery telemetry test");
+    },
+    getRuntimeWorkspaceRoot(cwd) {
+      return cwd;
+    },
+  };
+
+  class FakeCustomToolManager {
+    async start() {}
+    close() {}
+  }
+
+  class FakeToolRegistry {
+    getCallableTools() {
+      return [];
+    }
+
+    getAutoRoutableToolNames() {
+      return [];
+    }
+  }
+
+  let attempts = 0;
+  class FakeCodeExecutor {
+    async execute() {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new PtcPythonError(
+          "TypeError: object of type 'coroutine' has no len()",
+          'Traceback (most recent call last):\n  File "<stdin>", line 2, in user_main'
+        );
+      }
+
+      return {
+        output: "ok",
+        details: {
+          nestedToolCalls: 0,
+          nestedToolNames: [],
+          nestedResultChars: 0,
+          nestedResultCount: 0,
+          nestedErrors: 0,
+          durationMs: 1,
+          estimatedAvoidedTokens: 0,
+        },
+      };
+    }
+  }
+
+  const restoreSandbox = setModuleExports("../dist/sandbox-manager.js", {
+    createSandbox: async () => sandbox,
+  });
+  const restoreManager = setModuleExports("../dist/custom-tool-manager.js", {
+    CustomToolManager: FakeCustomToolManager,
+  });
+  const restoreRegistry = setModuleExports("../dist/tool-registry.js", {
+    ToolRegistry: FakeToolRegistry,
+  });
+  const restoreExecutor = setModuleExports("../dist/code-executor.js", {
+    CodeExecutor: FakeCodeExecutor,
+  });
+
+  try {
+    delete require.cache[require.resolve("../dist/index.js")];
+    const extensionModule = require("../dist/index.js");
+    const ptcExtension = extensionModule.default || extensionModule;
+
+    const eventHandlers = new Map();
+    const registered = [];
+    const pi = {
+      registerTool(tool) {
+        registered.push(tool);
+      },
+      on(event, handler) {
+        eventHandlers.set(event, handler);
+      },
+      getAllTools() {
+        return [{ name: "code_execution" }];
+      },
+      getActiveTools() {
+        return [];
+      },
+      setActiveTools() {},
+    };
+
+    await ptcExtension(pi);
+    await eventHandlers.get("session_start")({}, { cwd: process.cwd() });
+
+    const codeExecutionTool = registered.find((tool) => tool.name === "code_execution");
+    assert.ok(codeExecutionTool);
+
+    eventHandlers.get("before_agent_start")({ prompt: "Analyze files", systemPrompt: "base prompt" });
+    await assert.rejects(
+      codeExecutionTool.execute(
+        "call-1",
+        { code: "path = 'README.md'\ncontent = read(path)\nreturn len(content)" },
+        undefined,
+        undefined,
+        { cwd: process.cwd() }
+      ),
+      PtcPythonError
+    );
+
+    const firstContext = eventHandlers.get("context")({ messages: [] });
+    assert.equal(firstContext.messages[0].customType, "ptc-recovery");
+
+    const result = await codeExecutionTool.execute(
+      "call-2",
+      { code: "path = 'README.md'\ncontent = await read(path)\nreturn len(content)" },
+      undefined,
+      undefined,
+      { cwd: process.cwd() }
+    );
+
+    assert.deepEqual(result.details.recovery, {
+      eligible: true,
+      attempted: true,
+      failureClass: "missing-await",
+    });
+    assert.deepEqual(result.details.telemetry, {
+      autoRouted: false,
+      firstToolPath: "code_execution",
+      codeExecutionAttempts: 2,
+      recoveryAttemptCount: 1,
+      terminalState: "success",
+    });
+  } finally {
+    if (previousAutoRecover === undefined) {
+      delete process.env.PTC_AUTO_RECOVER;
+    } else {
+      process.env.PTC_AUTO_RECOVER = previousAutoRecover;
+    }
+    restoreSandbox();
+    restoreManager();
+    restoreRegistry();
+    restoreExecutor();
+    delete require.cache[require.resolve("../dist/index.js")];
+  }
+});
+
+test("ptc extension includes first-path telemetry in non-recovered code_execution details", async () => {
+  const sandbox = {
+    async cleanup() {},
+    spawn() {
+      throw new Error("sandbox spawn should not be used in telemetry test");
+    },
+    getRuntimeWorkspaceRoot(cwd) {
+      return cwd;
+    },
+  };
+
+  class FakeCustomToolManager {
+    async start() {}
+    close() {}
+  }
+
+  class FakeToolRegistry {
+    getCallableTools() {
+      return [];
+    }
+
+    getAutoRoutableToolNames() {
+      return ["read", "grep"];
+    }
+  }
+
+  class FakeCodeExecutor {
+    async execute() {
+      return {
+        output: "ok",
+        details: {
+          nestedToolCalls: 0,
+          nestedToolNames: [],
+          nestedResultChars: 0,
+          nestedResultCount: 0,
+          nestedErrors: 0,
+          durationMs: 1,
+          estimatedAvoidedTokens: 0,
+        },
+      };
+    }
+  }
+
+  const restoreSandbox = setModuleExports("../dist/sandbox-manager.js", {
+    createSandbox: async () => sandbox,
+  });
+  const restoreManager = setModuleExports("../dist/custom-tool-manager.js", {
+    CustomToolManager: FakeCustomToolManager,
+  });
+  const restoreRegistry = setModuleExports("../dist/tool-registry.js", {
+    ToolRegistry: FakeToolRegistry,
+  });
+  const restoreExecutor = setModuleExports("../dist/code-executor.js", {
+    CodeExecutor: FakeCodeExecutor,
+  });
+
+  try {
+    delete require.cache[require.resolve("../dist/index.js")];
+    const extensionModule = require("../dist/index.js");
+    const ptcExtension = extensionModule.default || extensionModule;
+
+    const eventHandlers = new Map();
+    const registered = [];
+    const activeTools = ["read", "grep"];
+    const pi = {
+      registerTool(tool) {
+        registered.push(tool);
+      },
+      on(event, handler) {
+        eventHandlers.set(event, handler);
+      },
+      getAllTools() {
+        return [{ name: "code_execution" }];
+      },
+      getActiveTools() {
+        return [...activeTools];
+      },
+      setActiveTools(next) {
+        activeTools.splice(0, activeTools.length, ...next);
+      },
+    };
+
+    await ptcExtension(pi);
+    await eventHandlers.get("session_start")({}, { cwd: process.cwd() });
+    eventHandlers.get("before_agent_start")({
+      prompt: "Analyze the first 8 test/**/*.test.ts files and return compact JSON only",
+      systemPrompt: "base prompt",
+    });
+
+    const codeExecutionTool = registered.find((tool) => tool.name === "code_execution");
+    assert.ok(codeExecutionTool);
+
+    const result = await codeExecutionTool.execute(
+      "call-1",
+      { code: "return 1" },
+      undefined,
+      undefined,
+      { cwd: process.cwd() }
+    );
+
+    assert.deepEqual(result.details.recovery, {
+      eligible: false,
+      attempted: false,
+      failureClass: null,
+    });
+    assert.deepEqual(result.details.telemetry, {
+      autoRouted: true,
+      firstToolPath: "code_execution",
+      codeExecutionAttempts: 1,
+      recoveryAttemptCount: 0,
+      terminalState: "success",
+    });
+  } finally {
     restoreSandbox();
     restoreManager();
     restoreRegistry();

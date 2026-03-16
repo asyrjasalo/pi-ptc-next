@@ -1,6 +1,6 @@
 import type { ChildProcess } from "child_process";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { PtcRecoveryState } from "../recovery-state";
+import type { PtcExecutionTelemetry, PtcRecoveryDetails, PtcRecoveryState } from "../recovery-state";
 import type { ToolUpdateCallback } from "./tool-types";
 
 export interface SandboxManager {
@@ -52,6 +52,8 @@ export interface ExecutionDetails extends ExecutionMetrics {
   currentLine?: number;
   totalLines?: number;
   userCode?: string[];
+  telemetry?: PtcExecutionTelemetry;
+  recovery?: PtcRecoveryDetails;
 }
 
 export interface CodeExecutionResult {

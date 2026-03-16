@@ -2,8 +2,11 @@ import type { PtcSettings } from "./contracts/settings";
 
 export type RecoveryFailureClass = "missing-await" | "async-wrapper-iterated";
 export type RecoveryTerminalState = "success" | "failed_without_recovery" | "failed_after_recovery";
+export type PtcFirstToolPath = "code_execution" | "direct";
 
 export interface PtcRecoveryState {
+  autoRouted: boolean;
+  firstToolPath: PtcFirstToolPath | null;
   routedToCodeExecution: boolean;
   codeExecutionAttempts: number;
   recoveryAttempted: boolean;
@@ -11,8 +14,24 @@ export interface PtcRecoveryState {
   terminalState: RecoveryTerminalState | null;
 }
 
+export interface PtcExecutionTelemetry {
+  autoRouted: boolean;
+  firstToolPath: PtcFirstToolPath | null;
+  codeExecutionAttempts: number;
+  recoveryAttemptCount: number;
+  terminalState: RecoveryTerminalState | null;
+}
+
+export interface PtcRecoveryDetails {
+  eligible: boolean;
+  attempted: boolean;
+  failureClass: RecoveryFailureClass | null;
+}
+
 export function createPtcRecoveryState(): PtcRecoveryState {
   return {
+    autoRouted: false,
+    firstToolPath: null,
     routedToCodeExecution: false,
     codeExecutionAttempts: 0,
     recoveryAttempted: false,
@@ -21,8 +40,15 @@ export function createPtcRecoveryState(): PtcRecoveryState {
   };
 }
 
+export function noteAutomaticRouting(state: PtcRecoveryState): void {
+  state.autoRouted = true;
+}
+
 export function noteCodeExecutionAttempt(state: PtcRecoveryState): void {
   state.routedToCodeExecution = true;
+  if (!state.firstToolPath) {
+    state.firstToolPath = "code_execution";
+  }
   state.codeExecutionAttempts += 1;
 }
 
@@ -53,4 +79,22 @@ export function noteCodeExecutionSuccess(state: PtcRecoveryState): void {
 
 export function noteCodeExecutionFailure(state: PtcRecoveryState): void {
   state.terminalState = state.recoveryAttempted ? "failed_after_recovery" : "failed_without_recovery";
+}
+
+export function buildPtcExecutionTelemetry(state: PtcRecoveryState): PtcExecutionTelemetry {
+  return {
+    autoRouted: state.autoRouted,
+    firstToolPath: state.firstToolPath,
+    codeExecutionAttempts: state.codeExecutionAttempts,
+    recoveryAttemptCount: state.recoveryAttempted ? 1 : 0,
+    terminalState: state.terminalState,
+  };
+}
+
+export function buildPtcRecoveryDetails(state: PtcRecoveryState): PtcRecoveryDetails {
+  return {
+    eligible: state.failureClass !== null,
+    attempted: state.recoveryAttempted,
+    failureClass: state.failureClass,
+  };
 }
