@@ -75,7 +75,7 @@
         "Run integration tests proving one recovery attempt maximum, mutation prompt exclusion, and per-request state reset.",
         "Verify the full repository test suite passes after the new coverage is added."
       ],
-      "passes": false,
+      "passes": true,
       "regression_notes": ""
     },
     {

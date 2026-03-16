@@ -80,6 +80,12 @@ export function loadSettingsFromEnv(): PtcSettings {
   return settings;
 }
 
+export function isMutationPrompt(prompt: string): boolean {
+  return /\b(edit|write|modify|change|update|fix|create|delete|rename|refactor|patch|implement|add|remove)\b/.test(
+    prompt.trim().toLowerCase()
+  );
+}
+
 export function shouldAutoRoutePromptToCodeExecution(prompt: string): boolean {
   const normalized = prompt.trim().toLowerCase();
   if (!normalized) {
@@ -90,11 +96,7 @@ export function shouldAutoRoutePromptToCodeExecution(prompt: string): boolean {
     return true;
   }
 
-  const hasMutationIntent =
-    /\b(edit|write|modify|change|update|fix|create|delete|rename|refactor|patch|implement|add|remove)\b/.test(
-      normalized
-    );
-  if (hasMutationIntent) {
+  if (isMutationPrompt(normalized)) {
     return false;
   }
 

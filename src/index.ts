@@ -20,7 +20,7 @@ import { createSandbox } from "./sandbox-manager";
 import { describePythonHelpers } from "./tools/python-tool-contract";
 import { ToolRegistry } from "./tool-registry";
 import type { ExecutionDetails, PtcSettings, PtcToolDefinition, SandboxManager, ToolInfo } from "./types";
-import { debugLog, loadSettingsFromEnv, shouldAutoRoutePromptToCodeExecution } from "./utils";
+import { debugLog, isMutationPrompt, loadSettingsFromEnv, shouldAutoRoutePromptToCodeExecution } from "./utils";
 
 function renderExecutingCode(
   codeLines: string[],
@@ -192,7 +192,7 @@ function buildCodeExecutionTool(
       } catch (error) {
         if (error instanceof PtcPythonError) {
           const failureClass = classifyCodeExecutionFailure(error.rawMessage, error.traceback, code);
-          if (failureClass && armAutomaticRecovery(recoveryState, currentSettings, failureClass)) {
+          if (sessionState.recoveryAllowed && failureClass && armAutomaticRecovery(recoveryState, currentSettings, failureClass)) {
             sessionState.pendingRecoveryPrompt = buildCodeExecutionRecoveryPrompt(failureClass);
           }
         }
@@ -227,6 +227,7 @@ interface PtcSessionState {
   customToolsStarted: boolean;
   activeToolsBeforeRouting: string[] | null;
   pendingRecoveryPrompt: string | null;
+  recoveryAllowed: boolean;
   recoveryState: PtcRecoveryState | null;
 }
 
@@ -334,6 +335,7 @@ function handleBeforeAgentStart(
   event: { prompt?: string; systemPrompt: string }
 ): { systemPrompt?: string } | undefined {
   sessionState.pendingRecoveryPrompt = null;
+  sessionState.recoveryAllowed = typeof event.prompt === "string" ? !isMutationPrompt(event.prompt) : true;
   sessionState.recoveryState = createPtcRecoveryState();
 
   if (typeof event.prompt !== "string") {
@@ -356,6 +358,7 @@ function handleContext(sessionState: PtcSessionState, event: { messages: Array<R
 function handleAgentEnd(pi: ExtensionAPI, sessionState: PtcSessionState): void {
   restoreActiveToolsAfterRouting(pi, sessionState);
   sessionState.pendingRecoveryPrompt = null;
+  sessionState.recoveryAllowed = true;
   sessionState.recoveryState = null;
 }
 
@@ -378,6 +381,7 @@ export default async function ptcExtension(pi: ExtensionAPI, context?: Extension
     customToolsStarted: false,
     activeToolsBeforeRouting: null,
     pendingRecoveryPrompt: null,
+    recoveryAllowed: true,
     recoveryState: null,
   };
 
