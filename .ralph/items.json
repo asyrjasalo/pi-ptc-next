@@ -31,7 +31,7 @@
         "Verify no second automatic recovery append occurs on a second failure in the same request.",
         "Verify literal zero-match path cases do not trigger auto-recovery in the initial implementation."
       ],
-      "passes": false,
+      "passes": true,
       "regression_notes": ""
     },
     {

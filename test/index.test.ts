@@ -375,3 +375,368 @@ test("ptc extension resets recovery state for each user request", async () => {
     delete require.cache[require.resolve("../dist/index.js")];
   }
 });
+
+test("ptc extension appends one targeted recovery message on the next turn after a qualifying async failure", async () => {
+  const previousAutoRecover = process.env.PTC_AUTO_RECOVER;
+  process.env.PTC_AUTO_RECOVER = "true";
+
+  const { PtcPythonError } = require("../dist/execution/execution-errors.js");
+  const recoveryPrompt =
+    "PTC recovery: You called an async helper without await. Helpers like read, glob, find, grep, and ls are async wrappers. Await each helper call before using its result.";
+
+  const sandbox = {
+    async cleanup() {},
+    spawn() {
+      throw new Error("sandbox spawn should not be used in recovery lifecycle test");
+    },
+    getRuntimeWorkspaceRoot(cwd) {
+      return cwd;
+    },
+  };
+
+  class FakeCustomToolManager {
+    async start() {}
+    close() {}
+  }
+
+  class FakeToolRegistry {
+    getCallableTools() {
+      return [];
+    }
+
+    getAutoRoutableToolNames() {
+      return [];
+    }
+  }
+
+  class FakeCodeExecutor {
+    async execute() {
+      throw new PtcPythonError(
+        "TypeError: object of type 'coroutine' has no len()",
+        'Traceback (most recent call last):\n  File "<stdin>", line 2, in user_main'
+      );
+    }
+  }
+
+  const restoreSandbox = setModuleExports("../dist/sandbox-manager.js", {
+    createSandbox: async () => sandbox,
+  });
+  const restoreManager = setModuleExports("../dist/custom-tool-manager.js", {
+    CustomToolManager: FakeCustomToolManager,
+  });
+  const restoreRegistry = setModuleExports("../dist/tool-registry.js", {
+    ToolRegistry: FakeToolRegistry,
+  });
+  const restoreExecutor = setModuleExports("../dist/code-executor.js", {
+    CodeExecutor: FakeCodeExecutor,
+  });
+
+  try {
+    delete require.cache[require.resolve("../dist/index.js")];
+    const extensionModule = require("../dist/index.js");
+    const ptcExtension = extensionModule.default || extensionModule;
+
+    const eventHandlers = new Map();
+    const registered = [];
+    const pi = {
+      registerTool(tool) {
+        registered.push(tool);
+      },
+      on(event, handler) {
+        eventHandlers.set(event, handler);
+      },
+      getAllTools() {
+        return [{ name: "code_execution" }];
+      },
+      getActiveTools() {
+        return [];
+      },
+      setActiveTools() {},
+    };
+
+    await ptcExtension(pi);
+    await eventHandlers.get("session_start")({}, { cwd: process.cwd() });
+
+    const codeExecutionTool = registered.find((tool) => tool.name === "code_execution");
+    assert.ok(codeExecutionTool);
+
+    eventHandlers.get("before_agent_start")({ prompt: "Analyze files", systemPrompt: "base prompt" });
+    await assert.rejects(
+      codeExecutionTool.execute(
+        "call-1",
+        { code: "path = 'README.md'\ncontent = read(path)\nreturn len(content)" },
+        undefined,
+        undefined,
+        { cwd: process.cwd() }
+      ),
+      PtcPythonError
+    );
+
+    const firstContext = eventHandlers.get("context")({
+      messages: [{ role: "user", content: [{ type: "text", text: "Analyze files" }] }],
+    });
+    assert.equal(firstContext.messages.length, 2);
+    assert.deepEqual(firstContext.messages[1], {
+      role: "custom",
+      customType: "ptc-recovery",
+      content: recoveryPrompt,
+      display: true,
+      timestamp: firstContext.messages[1].timestamp,
+    });
+    assert.equal(typeof firstContext.messages[1].timestamp, "number");
+
+    const secondContext = eventHandlers.get("context")({
+      messages: [{ role: "user", content: [{ type: "text", text: "Analyze files" }] }],
+    });
+    assert.equal(secondContext, undefined);
+  } finally {
+    if (previousAutoRecover === undefined) {
+      delete process.env.PTC_AUTO_RECOVER;
+    } else {
+      process.env.PTC_AUTO_RECOVER = previousAutoRecover;
+    }
+    restoreSandbox();
+    restoreManager();
+    restoreRegistry();
+    restoreExecutor();
+    delete require.cache[require.resolve("../dist/index.js")];
+  }
+});
+
+test("ptc extension does not append a second automatic recovery message after recovery was already used", async () => {
+  const previousAutoRecover = process.env.PTC_AUTO_RECOVER;
+  process.env.PTC_AUTO_RECOVER = "true";
+
+  const { PtcPythonError } = require("../dist/execution/execution-errors.js");
+
+  const sandbox = {
+    async cleanup() {},
+    spawn() {
+      throw new Error("sandbox spawn should not be used in recovery lifecycle test");
+    },
+    getRuntimeWorkspaceRoot(cwd) {
+      return cwd;
+    },
+  };
+
+  class FakeCustomToolManager {
+    async start() {}
+    close() {}
+  }
+
+  class FakeToolRegistry {
+    getCallableTools() {
+      return [];
+    }
+
+    getAutoRoutableToolNames() {
+      return [];
+    }
+  }
+
+  let attempts = 0;
+  class FakeCodeExecutor {
+    async execute() {
+      attempts += 1;
+      throw new PtcPythonError(
+        "TypeError: 'coroutine' object is not iterable",
+        'Traceback (most recent call last):\n  File "<stdin>", line 2, in user_main'
+      );
+    }
+  }
+
+  const restoreSandbox = setModuleExports("../dist/sandbox-manager.js", {
+    createSandbox: async () => sandbox,
+  });
+  const restoreManager = setModuleExports("../dist/custom-tool-manager.js", {
+    CustomToolManager: FakeCustomToolManager,
+  });
+  const restoreRegistry = setModuleExports("../dist/tool-registry.js", {
+    ToolRegistry: FakeToolRegistry,
+  });
+  const restoreExecutor = setModuleExports("../dist/code-executor.js", {
+    CodeExecutor: FakeCodeExecutor,
+  });
+
+  try {
+    delete require.cache[require.resolve("../dist/index.js")];
+    const extensionModule = require("../dist/index.js");
+    const ptcExtension = extensionModule.default || extensionModule;
+
+    const eventHandlers = new Map();
+    const registered = [];
+    const pi = {
+      registerTool(tool) {
+        registered.push(tool);
+      },
+      on(event, handler) {
+        eventHandlers.set(event, handler);
+      },
+      getAllTools() {
+        return [{ name: "code_execution" }];
+      },
+      getActiveTools() {
+        return [];
+      },
+      setActiveTools() {},
+    };
+
+    await ptcExtension(pi);
+    await eventHandlers.get("session_start")({}, { cwd: process.cwd() });
+
+    const codeExecutionTool = registered.find((tool) => tool.name === "code_execution");
+    assert.ok(codeExecutionTool);
+
+    eventHandlers.get("before_agent_start")({ prompt: "Analyze files", systemPrompt: "base prompt" });
+    await assert.rejects(
+      codeExecutionTool.execute(
+        "call-1",
+        { code: "paths = sorted(glob('src/**/*.ts'))\nreturn paths[:3]" },
+        undefined,
+        undefined,
+        { cwd: process.cwd() }
+      ),
+      PtcPythonError
+    );
+
+    const firstContext = eventHandlers.get("context")({ messages: [] });
+    assert.equal(firstContext.messages.length, 1);
+    assert.equal(firstContext.messages[0].customType, "ptc-recovery");
+
+    await assert.rejects(
+      codeExecutionTool.execute(
+        "call-2",
+        { code: "paths = sorted(glob('src/**/*.ts'))\nreturn paths[:3]" },
+        undefined,
+        undefined,
+        { cwd: process.cwd() }
+      ),
+      PtcPythonError
+    );
+
+    assert.equal(attempts, 2);
+    const secondContext = eventHandlers.get("context")({ messages: [] });
+    assert.equal(secondContext, undefined);
+  } finally {
+    if (previousAutoRecover === undefined) {
+      delete process.env.PTC_AUTO_RECOVER;
+    } else {
+      process.env.PTC_AUTO_RECOVER = previousAutoRecover;
+    }
+    restoreSandbox();
+    restoreManager();
+    restoreRegistry();
+    restoreExecutor();
+    delete require.cache[require.resolve("../dist/index.js")];
+  }
+});
+
+test("ptc extension does not auto-recover literal zero-match path failures", async () => {
+  const previousAutoRecover = process.env.PTC_AUTO_RECOVER;
+  process.env.PTC_AUTO_RECOVER = "true";
+
+  const { PtcPythonError } = require("../dist/execution/execution-errors.js");
+
+  const sandbox = {
+    async cleanup() {},
+    spawn() {
+      throw new Error("sandbox spawn should not be used in zero-match recovery test");
+    },
+    getRuntimeWorkspaceRoot(cwd) {
+      return cwd;
+    },
+  };
+
+  class FakeCustomToolManager {
+    async start() {}
+    close() {}
+  }
+
+  class FakeToolRegistry {
+    getCallableTools() {
+      return [];
+    }
+
+    getAutoRoutableToolNames() {
+      return [];
+    }
+  }
+
+  class FakeCodeExecutor {
+    async execute() {
+      throw new PtcPythonError(
+        "FileNotFoundError: [Errno 2] No such file or directory: 'src/**/*.missing.ts'",
+        'Traceback (most recent call last):\n  File "<stdin>", line 2, in user_main'
+      );
+    }
+  }
+
+  const restoreSandbox = setModuleExports("../dist/sandbox-manager.js", {
+    createSandbox: async () => sandbox,
+  });
+  const restoreManager = setModuleExports("../dist/custom-tool-manager.js", {
+    CustomToolManager: FakeCustomToolManager,
+  });
+  const restoreRegistry = setModuleExports("../dist/tool-registry.js", {
+    ToolRegistry: FakeToolRegistry,
+  });
+  const restoreExecutor = setModuleExports("../dist/code-executor.js", {
+    CodeExecutor: FakeCodeExecutor,
+  });
+
+  try {
+    delete require.cache[require.resolve("../dist/index.js")];
+    const extensionModule = require("../dist/index.js");
+    const ptcExtension = extensionModule.default || extensionModule;
+
+    const eventHandlers = new Map();
+    const registered = [];
+    const pi = {
+      registerTool(tool) {
+        registered.push(tool);
+      },
+      on(event, handler) {
+        eventHandlers.set(event, handler);
+      },
+      getAllTools() {
+        return [{ name: "code_execution" }];
+      },
+      getActiveTools() {
+        return [];
+      },
+      setActiveTools() {},
+    };
+
+    await ptcExtension(pi);
+    await eventHandlers.get("session_start")({}, { cwd: process.cwd() });
+
+    const codeExecutionTool = registered.find((tool) => tool.name === "code_execution");
+    assert.ok(codeExecutionTool);
+
+    eventHandlers.get("before_agent_start")({ prompt: "Analyze files", systemPrompt: "base prompt" });
+    await assert.rejects(
+      codeExecutionTool.execute(
+        "call-1",
+        { code: "paths = await glob('src/**/*.missing.ts')\nreturn paths[0]" },
+        undefined,
+        undefined,
+        { cwd: process.cwd() }
+      ),
+      PtcPythonError
+    );
+
+    const contextResult = eventHandlers.get("context")({ messages: [] });
+    assert.equal(contextResult, undefined);
+  } finally {
+    if (previousAutoRecover === undefined) {
+      delete process.env.PTC_AUTO_RECOVER;
+    } else {
+      process.env.PTC_AUTO_RECOVER = previousAutoRecover;
+    }
+    restoreSandbox();
+    restoreManager();
+    restoreRegistry();
+    restoreExecutor();
+    delete require.cache[require.resolve("../dist/index.js")];
+  }
+});

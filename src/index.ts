@@ -2,17 +2,20 @@ import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Text, type Component } from "@mariozechner/pi-tui";
 import { CodeExecutor } from "./code-executor";
+import { PtcPythonError } from "./execution/execution-errors";
 import { CustomToolManager } from "./custom-tool-manager";
-import { createSandbox } from "./sandbox-manager";
-import { describePythonHelpers } from "./tools/python-tool-contract";
-import { ToolRegistry } from "./tool-registry";
+import { buildCodeExecutionRecoveryPrompt, classifyCodeExecutionFailure } from "./recovery-classifier";
 import {
+  armAutomaticRecovery,
   createPtcRecoveryState,
   noteCodeExecutionAttempt,
   noteCodeExecutionFailure,
   noteCodeExecutionSuccess,
   type PtcRecoveryState,
 } from "./recovery-state";
+import { createSandbox } from "./sandbox-manager";
+import { describePythonHelpers } from "./tools/python-tool-contract";
+import { ToolRegistry } from "./tool-registry";
 import type { ExecutionDetails, PtcSettings, PtcToolDefinition, SandboxManager, ToolInfo } from "./types";
 import { debugLog, loadSettingsFromEnv, shouldAutoRoutePromptToCodeExecution } from "./utils";
 
@@ -134,6 +137,16 @@ function getRequestRecoveryState(sessionState: PtcSessionState): PtcRecoveryStat
   return sessionState.recoveryState;
 }
 
+function buildRecoveryContextMessage(content: string) {
+  return {
+    role: "custom" as const,
+    customType: "ptc-recovery",
+    content,
+    display: true,
+    timestamp: Date.now(),
+  };
+}
+
 function buildCodeExecutionTool(
   currentSettings: PtcSettings,
   callableTools: ToolInfo[],
@@ -170,6 +183,13 @@ function buildCodeExecutionTool(
           details: result.details,
         };
       } catch (error) {
+        if (error instanceof PtcPythonError) {
+          const failureClass = classifyCodeExecutionFailure(error.rawMessage, error.traceback, code);
+          if (failureClass && armAutomaticRecovery(recoveryState, currentSettings, failureClass)) {
+            sessionState.pendingRecoveryPrompt = buildCodeExecutionRecoveryPrompt(failureClass);
+          }
+        }
+
         noteCodeExecutionFailure(recoveryState);
         throw error;
       }
@@ -199,6 +219,7 @@ interface PtcSessionState {
   currentCwd: string;
   customToolsStarted: boolean;
   activeToolsBeforeRouting: string[] | null;
+  pendingRecoveryPrompt: string | null;
   recoveryState: PtcRecoveryState | null;
 }
 
@@ -303,6 +324,7 @@ function handleBeforeAgentStart(
   sessionState: PtcSessionState,
   event: { prompt?: string; systemPrompt: string }
 ): { systemPrompt?: string } | undefined {
+  sessionState.pendingRecoveryPrompt = null;
   sessionState.recoveryState = createPtcRecoveryState();
 
   if (typeof event.prompt !== "string") {
@@ -312,8 +334,19 @@ function handleBeforeAgentStart(
   return applyAutoRouting(pi, toolRegistry, settings, sessionState, event.prompt, event.systemPrompt);
 }
 
+function handleContext(sessionState: PtcSessionState, event: { messages: Array<Record<string, unknown>> }) {
+  if (!sessionState.pendingRecoveryPrompt) {
+    return undefined;
+  }
+
+  const messages = [...event.messages, buildRecoveryContextMessage(sessionState.pendingRecoveryPrompt)];
+  sessionState.pendingRecoveryPrompt = null;
+  return { messages };
+}
+
 function handleAgentEnd(pi: ExtensionAPI, sessionState: PtcSessionState): void {
   restoreActiveToolsAfterRouting(pi, sessionState);
+  sessionState.pendingRecoveryPrompt = null;
   sessionState.recoveryState = null;
 }
 
@@ -335,6 +368,7 @@ export default async function ptcExtension(pi: ExtensionAPI, context?: Extension
     currentCwd: context?.cwd ?? process.cwd(),
     customToolsStarted: false,
     activeToolsBeforeRouting: null,
+    pendingRecoveryPrompt: null,
     recoveryState: null,
   };
 
@@ -358,11 +392,13 @@ export default async function ptcExtension(pi: ExtensionAPI, context?: Extension
     codeExecutor
   );
   const onBeforeAgentStart = handleBeforeAgentStart.bind(undefined, pi, toolRegistry, settings, sessionState);
+  const onContext = handleContext.bind(undefined, sessionState);
   const onAgentEnd = handleAgentEnd.bind(undefined, pi, sessionState);
   const onSessionShutdown = handleSessionShutdown.bind(undefined, customToolManager, sandboxManager);
 
   pi.on("session_start", onSessionStart);
   pi.on("before_agent_start", onBeforeAgentStart);
+  (pi as unknown as { on(event: "context", handler: typeof onContext): void }).on("context", onContext);
   pi.on("agent_end", onAgentEnd);
   pi.on("session_shutdown", onSessionShutdown);
 }
