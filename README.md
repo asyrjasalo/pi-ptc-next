@@ -31,6 +31,22 @@ pi install git:github.com/edxeth/pi-ptc-next
 
 This fork is published publicly as **pi-ptc-next** to distinguish it from the original `pi-ptc` repository while preserving clear attribution to Chris Egersdoerfer's upstream work.
 
+## What using it feels like now
+
+Use it normally.
+
+For simple requests, the agent should still use direct tools like `read`, `grep`, and `find`.
+For strong PTC-shaped requests, the extension now biases the agent toward `code_execution` proactively.
+
+Common auto-routing signals:
+
+- repo-wide or multi-file analysis
+- repeated lookups across many inputs
+- counting, grouping, ranking, filtering, or aggregation
+- prompts like "compact JSON only" or "keep intermediate results out of chat"
+
+This behavior is enabled by default with `PTC_AUTO_ROUTE=true`.
+
 ## Why this exists
 
 Without PTC, multi-step tool use usually looks like this:
@@ -79,6 +95,12 @@ Optional tools can be enabled via environment/config policy:
 - `write(...) -> dict`
 
 Custom and extension tools are **not callable from Python by default**. They must explicitly opt in with `ptc.enabled: true`.
+
+This fork also supports caller routing metadata via `ptc.callers`:
+
+- `callers: ["direct"]` — direct-only tool
+- `callers: ["code_execution"]` — Python-only tool
+- `callers: ["direct", "code_execution"]` — both
 
 ## Model-facing usage rules
 
@@ -156,8 +178,17 @@ These must opt in with:
 ptc: {
   enabled: true,
   readOnly: true,
+  callers: ["code_execution"], // optional: direct | code_execution | both
 }
 ```
+
+Recommended routing patterns:
+
+- `callers: ["direct"]` — user-facing tool that the model should call directly
+- `callers: ["code_execution"]` — helper tool intended only for Python/PTC workflows
+- `callers: ["direct", "code_execution"]` — shared tool usable from either path
+
+If a custom tool is marked code-execution-only, `pi-ptc-next` will register it but will not auto-activate it as a direct tool in the session.
 
 ## Environment variables
 
@@ -173,6 +204,7 @@ ptc: {
 
 - `PTC_ALLOW_MUTATIONS=true` — allow mutating tools from Python
 - `PTC_ALLOW_BASH=true` — allow `bash` from Python
+- `PTC_AUTO_ROUTE=true` — auto-route repo-wide analysis prompts toward `code_execution` (default: true)
 - `PTC_TRUSTED_READ_ONLY_TOOLS=query_db,fetch_metadata` — allowlisted custom tools treated as read-only when mutations are disabled
 - `PTC_CALLABLE_TOOLS=read,glob,find,grep,ls` — explicit allowlist override
 - `PTC_BLOCKED_TOOLS=bash,write` — explicit denylist override
@@ -293,6 +325,26 @@ If `details.ptcValue` is present, that JSON-compatible value is returned directl
 ## Hot reload
 
 Custom `.js` tools in `tools/` are watched and hot-reloaded while the session is running.
+
+## Routing notes
+
+This fork now implements a local/provider-agnostic equivalent of Anthropic's `allowed_callers` guidance.
+
+Important practical points:
+
+- `code_execution` is still just a tool choice from the model's perspective; nothing native in pi forces a model to use it.
+- To improve reliability, the extension now adds two layers of steering:
+  - stronger `code_execution` tool descriptions/examples
+  - prompt-time auto-routing for requests that look like clear PTC fits
+- Auto-routing is deliberately conservative and avoids prompts that look like editing or implementation tasks.
+
+For the deeper technical explanation and research notes, see [`docs/PTC-RESEARCH.md`](docs/PTC-RESEARCH.md).
+
+## Further reading
+
+- Technical findings and implementation notes: [`docs/PTC-RESEARCH.md`](docs/PTC-RESEARCH.md)
+- Anthropic advanced tool use snapshot: [`docs/advanced-tool-use.md`](docs/advanced-tool-use.md)
+- Anthropic PTC docs snapshot: [`docs/programmatic-tool-calling.md`](docs/programmatic-tool-calling.md)
 
 ## Metrics
 

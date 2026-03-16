@@ -58,6 +58,7 @@ function baseSettings(overrides = {}) {
     useDocker: false,
     allowUnsandboxedSubprocess: true,
     debugLogging: false,
+    autoRoute: true,
     trustedReadOnlyTools: undefined,
     callableTools: undefined,
     blockedTools: undefined,
@@ -133,4 +134,50 @@ test("ToolRegistry rejects duplicate python helper names", () => {
     () => registry.getCallableTools(process.cwd(), baseSettings({ trustedReadOnlyTools: ["tool_a", "tool_b"] })),
     /Duplicate Python helper name/
   );
+});
+
+test("ToolRegistry respects code_execution-only callers for custom tools", () => {
+  const registry = createRegistry();
+  registry.upsertTool({
+    name: "query_db",
+    description: "Query DB",
+    parameters: stringParamSchema(),
+    ptc: { enabled: true, readOnly: true, callers: ["code_execution"] },
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }], details: undefined };
+    },
+  });
+
+  const callable = registry.getCallableTools(
+    process.cwd(),
+    baseSettings({ trustedReadOnlyTools: ["query_db"] })
+  );
+  assert.ok(callable.some((tool) => tool.name === "query_db"));
+
+  const routable = registry.getAutoRoutableToolNames(
+    process.cwd(),
+    baseSettings({ trustedReadOnlyTools: ["query_db"] })
+  );
+  assert.ok(!routable.includes("query_db"));
+});
+
+test("ToolRegistry auto-routing only hides tools callable both directly and from code_execution", () => {
+  const registry = createRegistry();
+  registry.upsertTool({
+    name: "query_db",
+    description: "Query DB",
+    parameters: stringParamSchema(),
+    ptc: { enabled: true, readOnly: true, callers: ["direct", "code_execution"] },
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }], details: undefined };
+    },
+  });
+
+  const routable = registry.getAutoRoutableToolNames(
+    process.cwd(),
+    baseSettings({ trustedReadOnlyTools: ["query_db"] })
+  );
+  assert.ok(routable.includes("read"));
+  assert.ok(routable.includes("query_db"));
+  assert.ok(!routable.includes("code_execution"));
 });

@@ -6,10 +6,13 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import type { TSchema } from "@sinclair/typebox";
 
+export type PtcCaller = "direct" | "code_execution";
+
 export interface PtcToolOptions {
   enabled?: boolean;
   readOnly?: boolean;
   pythonName?: string;
+  callers?: PtcCaller[];
 }
 
 export type PtcToolDefinition<

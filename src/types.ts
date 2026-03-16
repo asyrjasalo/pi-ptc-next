@@ -2,6 +2,7 @@ import type {
   CallerMetadata as InternalCallerMetadata,
   ExecuteToolContext as InternalExecuteToolContext,
   LoadedTool as InternalLoadedTool,
+  PtcCaller as InternalPtcCaller,
   PtcToolDefinition as InternalPtcToolDefinition,
   PtcToolOptions as InternalPtcToolOptions,
   ToolInfo as InternalToolInfo,
@@ -21,6 +22,7 @@ import type { PtcSettings as InternalPtcSettings } from "./contracts/settings";
 export type CallerMetadata = InternalCallerMetadata;
 export type ExecuteToolContext = InternalExecuteToolContext;
 export type LoadedTool = InternalLoadedTool;
+export type PtcCaller = InternalPtcCaller;
 export type PtcToolDefinition = InternalPtcToolDefinition;
 export type PtcToolOptions = InternalPtcToolOptions;
 export type ToolInfo = InternalToolInfo;

@@ -155,7 +155,11 @@ export class CustomToolManager {
     }
   }
 
-  private setToolActive(toolName: string): void {
+  private setToolActive(toolName: string, tool: PtcToolDefinition): void {
+    if (Array.isArray(tool.ptc?.callers) && !tool.ptc.callers.includes("direct")) {
+      return;
+    }
+
     const activeTools = this.pi.getActiveTools();
     if (!activeTools.includes(toolName)) {
       this.pi.setActiveTools([...activeTools, toolName]);
@@ -177,7 +181,7 @@ export class CustomToolManager {
 
     this.toolRegistry.upsertTool(loadedTool.tool);
     this.pi.registerTool(loadedTool.tool);
-    this.setToolActive(loadedTool.tool.name);
+    this.setToolActive(loadedTool.tool.name, loadedTool.tool);
     this.fileToTool.set(loadedTool.filename, loadedTool.tool.name);
     this.onToolSetChanged?.();
     debugLog(`Registered custom tool ${loadedTool.tool.name} from ${loadedTool.filename}`);

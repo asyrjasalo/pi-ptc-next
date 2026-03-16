@@ -70,11 +70,11 @@ test("CustomToolManager startup loads valid tools and warns for invalid ones", a
   );
   await writeTool(toolsDir, "broken.js", "module.exports = { name: 'broken' };");
 
-  const registered = [];
-  const activeTools = [];
-  const upserted = [];
+  const registered: string[] = [];
+  const activeTools: string[] = [];
+  const upserted: string[] = [];
   let changed = 0;
-  const warnings = [];
+  const warnings: string[] = [];
   const warningHandler = (warning) => {
     warnings.push(warning.message);
   };
@@ -120,6 +120,49 @@ test("CustomToolManager startup loads valid tools and warns for invalid ones", a
   assert.match(warnings.join("\n"), /Skipping invalid custom tool broken\.js during startup/);
 });
 
+test("CustomToolManager does not auto-activate code_execution-only tools", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ptc-code-only-"));
+  const toolsDir = path.join(root, "tools");
+  await fs.mkdir(toolsDir, { recursive: true });
+  await writeTool(
+    toolsDir,
+    "query.js",
+    `module.exports = {
+      name: 'query_db',
+      description: 'Query DB',
+      parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+      ptc: { enabled: true, readOnly: true, callers: ['code_execution'] },
+      async execute() { return { content: [{ type: 'text', text: 'ok' }], details: undefined }; }
+    };`
+  );
+
+  const activeTools: string[] = [];
+  const pi = {
+    registerTool() {},
+    getActiveTools() {
+      return [...activeTools];
+    },
+    setActiveTools(next) {
+      activeTools.splice(0, activeTools.length, ...next);
+    },
+  };
+  const toolRegistry = {
+    upsertTool() {},
+    removeTool() {
+      return true;
+    },
+  };
+
+  const manager = new CustomToolManager(root, pi, toolRegistry);
+  try {
+    await manager.start();
+  } finally {
+    manager.close();
+  }
+
+  assert.deepEqual(activeTools, []);
+});
+
 test("CustomToolManager reloads, renames, invalidates, and removes tools end-to-end", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ptc-reload-"));
   const toolsDir = path.join(root, "tools");
@@ -135,10 +178,10 @@ test("CustomToolManager reloads, renames, invalidates, and removes tools end-to-
     };`
   );
 
-  const activeTools = [];
-  const registered = [];
-  const removed = [];
-  const warnings = [];
+  const activeTools: string[] = [];
+  const registered: string[] = [];
+  const removed: string[] = [];
+  const warnings: string[] = [];
   const warningHandler = (warning) => {
     warnings.push(warning.message);
   };

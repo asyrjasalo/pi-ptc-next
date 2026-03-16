@@ -7,7 +7,7 @@ import { createSandbox } from "./sandbox-manager";
 import { describePythonHelpers } from "./tools/python-tool-contract";
 import { ToolRegistry } from "./tool-registry";
 import type { ExecutionDetails, PtcSettings, PtcToolDefinition, SandboxManager, ToolInfo } from "./types";
-import { loadSettingsFromEnv } from "./utils";
+import { debugLog, loadSettingsFromEnv, shouldAutoRoutePromptToCodeExecution } from "./utils";
 
 function renderExecutingCode(
   codeLines: string[],
@@ -65,7 +65,17 @@ function buildToolDescription(currentSettings: PtcSettings, callableTools: ToolI
 
   return `Execute Python code with local programmatic tool calling.
 
-Use this tool when you need 3+ dependent tool calls, loops, filtering, aggregation, or large intermediate results that should stay out of the chat context. Avoid it for a single simple tool call.
+Prefer this tool first for repo-wide analysis, repeated lookups, loops, grouping, ranking, counting, filtering, or any task with 3+ dependent tool calls. Use direct tools instead for one-file reads, one-off grep/find calls, or tiny lookups.
+
+Strong signals to use code_execution:
+- Scan many files and return counts, grouped summaries, rankings, or compact JSON
+- Run the same tool across many inputs and aggregate the results
+- Keep large intermediate results out of the chat context
+
+Examples:
+- Count imports across src/**/*.ts and return the top 10 packages
+- Analyze the first 8 test files and return compact JSON only
+- Check many endpoints or records, then return only the failures
 
 Important rules:
 - Top-level await is already available. Do not call asyncio.run(...).
@@ -162,6 +172,60 @@ function buildCodeExecutionTool(
 interface PtcSessionState {
   currentCwd: string;
   customToolsStarted: boolean;
+  activeToolsBeforeRouting: string[] | null;
+}
+
+function areToolListsEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function applyAutoRouting(
+  pi: ExtensionAPI,
+  toolRegistry: ToolRegistry,
+  settings: PtcSettings,
+  sessionState: PtcSessionState,
+  prompt: string,
+  currentSystemPrompt: string
+): { systemPrompt?: string } | undefined {
+  if (!settings.autoRoute || !shouldAutoRoutePromptToCodeExecution(prompt)) {
+    return undefined;
+  }
+
+  const allTools = pi.getAllTools();
+  if (!allTools.some((tool) => tool.name === "code_execution")) {
+    return undefined;
+  }
+
+  const activeTools = pi.getActiveTools();
+  const routableToolNames = new Set(toolRegistry.getAutoRoutableToolNames(sessionState.currentCwd, settings));
+  const nextActiveTools = activeTools.filter((name) => !routableToolNames.has(name));
+  if (!nextActiveTools.includes("code_execution")) {
+    nextActiveTools.push("code_execution");
+  }
+
+  if (!areToolListsEqual(activeTools, nextActiveTools)) {
+    sessionState.activeToolsBeforeRouting = activeTools;
+    pi.setActiveTools(nextActiveTools);
+    debugLog("Auto-routed prompt to code_execution", { prompt, activeTools, nextActiveTools });
+  }
+
+  return {
+    systemPrompt:
+      `${currentSystemPrompt}\n\n` +
+      "This request is a strong fit for code_execution. Prefer calling code_execution first and keep large intermediate results inside Python unless the user explicitly asked to see them.",
+  };
+}
+
+function restoreActiveToolsAfterRouting(pi: ExtensionAPI, sessionState: PtcSessionState): void {
+  if (!sessionState.activeToolsBeforeRouting) {
+    return;
+  }
+
+  pi.setActiveTools(sessionState.activeToolsBeforeRouting);
+  debugLog("Restored active tools after code_execution routing", {
+    restored: sessionState.activeToolsBeforeRouting,
+  });
+  sessionState.activeToolsBeforeRouting = null;
 }
 
 function registerCodeExecutionTool(
@@ -204,6 +268,24 @@ async function handleSessionStart(
   registerCodeExecutionTool(pi, toolRegistry, settings, codeExecutor, sessionState.currentCwd);
 }
 
+function handleBeforeAgentStart(
+  pi: ExtensionAPI,
+  toolRegistry: ToolRegistry,
+  settings: PtcSettings,
+  sessionState: PtcSessionState,
+  event: { prompt?: string; systemPrompt: string }
+): { systemPrompt?: string } | undefined {
+  if (typeof event.prompt !== "string") {
+    return undefined;
+  }
+
+  return applyAutoRouting(pi, toolRegistry, settings, sessionState, event.prompt, event.systemPrompt);
+}
+
+function handleAgentEnd(pi: ExtensionAPI, sessionState: PtcSessionState): void {
+  restoreActiveToolsAfterRouting(pi, sessionState);
+}
+
 async function handleSessionShutdown(
   customToolManager: CustomToolManager,
   sandboxManager: SandboxManager
@@ -221,6 +303,7 @@ export default async function ptcExtension(pi: ExtensionAPI, context?: Extension
   const sessionState: PtcSessionState = {
     currentCwd: context?.cwd ?? process.cwd(),
     customToolsStarted: false,
+    activeToolsBeforeRouting: null,
   };
 
   const onToolSetChanged = registerCodeExecutionToolForState.bind(
@@ -242,8 +325,12 @@ export default async function ptcExtension(pi: ExtensionAPI, context?: Extension
     settings,
     codeExecutor
   );
+  const onBeforeAgentStart = handleBeforeAgentStart.bind(undefined, pi, toolRegistry, settings, sessionState);
+  const onAgentEnd = handleAgentEnd.bind(undefined, pi, sessionState);
   const onSessionShutdown = handleSessionShutdown.bind(undefined, customToolManager, sandboxManager);
 
   pi.on("session_start", onSessionStart);
+  pi.on("before_agent_start", onBeforeAgentStart);
+  pi.on("agent_end", onAgentEnd);
   pi.on("session_shutdown", onSessionShutdown);
 }
