@@ -252,3 +252,126 @@ test("ptc extension auto-routes repo-wide analysis prompts toward code_execution
     delete require.cache[require.resolve("../dist/index.js")];
   }
 });
+
+test("ptc extension resets recovery state for each user request", async () => {
+  const sandbox = {
+    async cleanup() {},
+    spawn() {
+      throw new Error("sandbox spawn should not be used in recovery state test");
+    },
+    getRuntimeWorkspaceRoot(cwd) {
+      return cwd;
+    },
+  };
+
+  class FakeCustomToolManager {
+    async start() {}
+    close() {}
+  }
+
+  class FakeToolRegistry {
+    getCallableTools() {
+      return [];
+    }
+
+    getAutoRoutableToolNames() {
+      return [];
+    }
+  }
+
+  const seenStates = [];
+  class FakeCodeExecutor {
+    async execute(_code, options) {
+      seenStates.push(options.recoveryState);
+      return {
+        output: "ok",
+        details: {
+          nestedToolCalls: 0,
+          nestedToolNames: [],
+          nestedResultChars: 0,
+          nestedResultCount: 0,
+          nestedErrors: 0,
+          durationMs: 1,
+          estimatedAvoidedTokens: 0,
+        },
+      };
+    }
+  }
+
+  const restoreSandbox = setModuleExports("../dist/sandbox-manager.js", {
+    createSandbox: async () => sandbox,
+  });
+  const restoreManager = setModuleExports("../dist/custom-tool-manager.js", {
+    CustomToolManager: FakeCustomToolManager,
+  });
+  const restoreRegistry = setModuleExports("../dist/tool-registry.js", {
+    ToolRegistry: FakeToolRegistry,
+  });
+  const restoreExecutor = setModuleExports("../dist/code-executor.js", {
+    CodeExecutor: FakeCodeExecutor,
+  });
+
+  try {
+    delete require.cache[require.resolve("../dist/index.js")];
+    const extensionModule = require("../dist/index.js");
+    const ptcExtension = extensionModule.default || extensionModule;
+
+    const eventHandlers = new Map();
+    const registered = [];
+    const pi = {
+      registerTool(tool) {
+        registered.push(tool);
+      },
+      on(event, handler) {
+        eventHandlers.set(event, handler);
+      },
+      getAllTools() {
+        return [{ name: "code_execution" }];
+      },
+      getActiveTools() {
+        return [];
+      },
+      setActiveTools() {},
+    };
+
+    await ptcExtension(pi);
+    await eventHandlers.get("session_start")({}, { cwd: process.cwd() });
+
+    const codeExecutionTool = registered.find((tool) => tool.name === "code_execution");
+    assert.ok(codeExecutionTool);
+
+    eventHandlers.get("before_agent_start")({ prompt: "Analyze files", systemPrompt: "base prompt" });
+    await codeExecutionTool.execute("call-1", { code: "return 1" }, undefined, undefined, { cwd: process.cwd() });
+    await codeExecutionTool.execute("call-2", { code: "return 2" }, undefined, undefined, { cwd: process.cwd() });
+
+    const firstRequestState = seenStates[0];
+    assert.equal(seenStates[1], firstRequestState);
+    assert.deepEqual(firstRequestState, {
+      routedToCodeExecution: true,
+      codeExecutionAttempts: 2,
+      recoveryAttempted: false,
+      failureClass: null,
+      terminalState: "success",
+    });
+
+    eventHandlers.get("agent_end")();
+    eventHandlers.get("before_agent_start")({ prompt: "Analyze files", systemPrompt: "base prompt" });
+    await codeExecutionTool.execute("call-3", { code: "return 3" }, undefined, undefined, { cwd: process.cwd() });
+
+    const secondRequestState = seenStates[2];
+    assert.notEqual(secondRequestState, firstRequestState);
+    assert.deepEqual(secondRequestState, {
+      routedToCodeExecution: true,
+      codeExecutionAttempts: 1,
+      recoveryAttempted: false,
+      failureClass: null,
+      terminalState: "success",
+    });
+  } finally {
+    restoreSandbox();
+    restoreManager();
+    restoreRegistry();
+    restoreExecutor();
+    delete require.cache[require.resolve("../dist/index.js")];
+  }
+});

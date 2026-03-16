@@ -6,6 +6,13 @@ import { CustomToolManager } from "./custom-tool-manager";
 import { createSandbox } from "./sandbox-manager";
 import { describePythonHelpers } from "./tools/python-tool-contract";
 import { ToolRegistry } from "./tool-registry";
+import {
+  createPtcRecoveryState,
+  noteCodeExecutionAttempt,
+  noteCodeExecutionFailure,
+  noteCodeExecutionSuccess,
+  type PtcRecoveryState,
+} from "./recovery-state";
 import type { ExecutionDetails, PtcSettings, PtcToolDefinition, SandboxManager, ToolInfo } from "./types";
 import { debugLog, loadSettingsFromEnv, shouldAutoRoutePromptToCodeExecution } from "./utils";
 
@@ -119,10 +126,19 @@ function getExtensionRoot(): string {
     : __dirname;
 }
 
+function getRequestRecoveryState(sessionState: PtcSessionState): PtcRecoveryState {
+  if (!sessionState.recoveryState) {
+    sessionState.recoveryState = createPtcRecoveryState();
+  }
+
+  return sessionState.recoveryState;
+}
+
 function buildCodeExecutionTool(
   currentSettings: PtcSettings,
   callableTools: ToolInfo[],
-  codeExecutor: CodeExecutor
+  codeExecutor: CodeExecutor,
+  sessionState: PtcSessionState
 ): PtcToolDefinition {
   return {
     name: "code_execution",
@@ -135,18 +151,28 @@ function buildCodeExecutionTool(
       }),
     }),
     execute: async (toolCallId, { code }, signal, onUpdate, ctx) => {
-      const result = await codeExecutor.execute(code, {
-        cwd: ctx.cwd,
-        ctx,
-        signal,
-        onUpdate,
-        parentToolCallId: toolCallId,
-      });
+      const recoveryState = getRequestRecoveryState(sessionState);
+      noteCodeExecutionAttempt(recoveryState);
 
-      return {
-        content: [{ type: "text" as const, text: result.output || "(No output)" }],
-        details: result.details,
-      };
+      try {
+        const result = await codeExecutor.execute(code, {
+          cwd: ctx.cwd,
+          ctx,
+          signal,
+          onUpdate,
+          parentToolCallId: toolCallId,
+          recoveryState,
+        });
+
+        noteCodeExecutionSuccess(recoveryState);
+        return {
+          content: [{ type: "text" as const, text: result.output || "(No output)" }],
+          details: result.details,
+        };
+      } catch (error) {
+        noteCodeExecutionFailure(recoveryState);
+        throw error;
+      }
     },
     renderResult(result, { isPartial }, theme) {
       const details = result.details as ExecutionDetails | undefined;
@@ -173,6 +199,7 @@ interface PtcSessionState {
   currentCwd: string;
   customToolsStarted: boolean;
   activeToolsBeforeRouting: string[] | null;
+  recoveryState: PtcRecoveryState | null;
 }
 
 function areToolListsEqual(left: string[], right: string[]): boolean {
@@ -233,10 +260,11 @@ function registerCodeExecutionTool(
   toolRegistry: ToolRegistry,
   settings: PtcSettings,
   codeExecutor: CodeExecutor,
-  currentCwd: string
+  currentCwd: string,
+  sessionState: PtcSessionState
 ): void {
   const callableTools = toolRegistry.getCallableTools(currentCwd, settings);
-  pi.registerTool(buildCodeExecutionTool(settings, callableTools, codeExecutor));
+  pi.registerTool(buildCodeExecutionTool(settings, callableTools, codeExecutor, sessionState));
 }
 
 function registerCodeExecutionToolForState(
@@ -246,7 +274,7 @@ function registerCodeExecutionToolForState(
   codeExecutor: CodeExecutor,
   sessionState: PtcSessionState
 ): void {
-  registerCodeExecutionTool(pi, toolRegistry, settings, codeExecutor, sessionState.currentCwd);
+  registerCodeExecutionTool(pi, toolRegistry, settings, codeExecutor, sessionState.currentCwd, sessionState);
 }
 
 async function handleSessionStart(
@@ -265,7 +293,7 @@ async function handleSessionStart(
     sessionState.customToolsStarted = true;
   }
 
-  registerCodeExecutionTool(pi, toolRegistry, settings, codeExecutor, sessionState.currentCwd);
+  registerCodeExecutionTool(pi, toolRegistry, settings, codeExecutor, sessionState.currentCwd, sessionState);
 }
 
 function handleBeforeAgentStart(
@@ -275,6 +303,8 @@ function handleBeforeAgentStart(
   sessionState: PtcSessionState,
   event: { prompt?: string; systemPrompt: string }
 ): { systemPrompt?: string } | undefined {
+  sessionState.recoveryState = createPtcRecoveryState();
+
   if (typeof event.prompt !== "string") {
     return undefined;
   }
@@ -284,6 +314,7 @@ function handleBeforeAgentStart(
 
 function handleAgentEnd(pi: ExtensionAPI, sessionState: PtcSessionState): void {
   restoreActiveToolsAfterRouting(pi, sessionState);
+  sessionState.recoveryState = null;
 }
 
 async function handleSessionShutdown(
@@ -304,6 +335,7 @@ export default async function ptcExtension(pi: ExtensionAPI, context?: Extension
     currentCwd: context?.cwd ?? process.cwd(),
     customToolsStarted: false,
     activeToolsBeforeRouting: null,
+    recoveryState: null,
   };
 
   const onToolSetChanged = registerCodeExecutionToolForState.bind(

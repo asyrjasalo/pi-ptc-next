@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   estimateTokensFromChars,
+  loadSettingsFromEnv,
   shouldAutoRoutePromptToCodeExecution,
   truncateOutput,
   validateUserCode,
@@ -45,4 +46,31 @@ test("shouldAutoRoutePromptToCodeExecution detects multi-file aggregation prompt
 test("shouldAutoRoutePromptToCodeExecution ignores simple or mutating prompts", () => {
   assert.equal(shouldAutoRoutePromptToCodeExecution("Read src/index.ts"), false);
   assert.equal(shouldAutoRoutePromptToCodeExecution("Fix the failing tests in src/index.ts"), false);
+});
+
+test("loadSettingsFromEnv clamps automatic recovery attempts to the supported range", () => {
+  const previousAutoRecover = process.env.PTC_AUTO_RECOVER;
+  const previousMaxAttempts = process.env.PTC_AUTO_RECOVER_MAX_ATTEMPTS;
+
+  try {
+    process.env.PTC_AUTO_RECOVER = "true";
+    process.env.PTC_AUTO_RECOVER_MAX_ATTEMPTS = "5";
+    assert.equal(loadSettingsFromEnv().autoRecover, true);
+    assert.equal(loadSettingsFromEnv().autoRecoverMaxAttempts, 1);
+
+    process.env.PTC_AUTO_RECOVER_MAX_ATTEMPTS = "-3";
+    assert.equal(loadSettingsFromEnv().autoRecoverMaxAttempts, 0);
+  } finally {
+    if (previousAutoRecover === undefined) {
+      delete process.env.PTC_AUTO_RECOVER;
+    } else {
+      process.env.PTC_AUTO_RECOVER = previousAutoRecover;
+    }
+
+    if (previousMaxAttempts === undefined) {
+      delete process.env.PTC_AUTO_RECOVER_MAX_ATTEMPTS;
+    } else {
+      process.env.PTC_AUTO_RECOVER_MAX_ATTEMPTS = previousMaxAttempts;
+    }
+  }
 });

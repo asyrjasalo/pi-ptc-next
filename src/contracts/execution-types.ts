@@ -1,5 +1,6 @@
 import type { ChildProcess } from "child_process";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { PtcRecoveryState } from "../recovery-state";
 import type { ToolUpdateCallback } from "./tool-types";
 
 export interface SandboxManager {
@@ -44,6 +45,7 @@ export interface ExecutionOptions {
   signal?: AbortSignal;
   onUpdate?: ToolUpdateCallback;
   parentToolCallId?: string;
+  recoveryState?: PtcRecoveryState;
 }
 
 export interface ExecutionDetails extends ExecutionMetrics {

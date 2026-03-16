@@ -26,6 +26,19 @@ function parsePositiveIntEnv(value: string | undefined, fallback: number): numbe
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseClampedIntEnv(value: string | undefined, fallback: number, min: number, max: number): number {
+  if (value === undefined || value === "") {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.min(max, Math.max(min, parsed));
+}
+
 function parseListEnv(value: string | undefined): string[] | undefined {
   if (!value) {
     return undefined;
@@ -56,6 +69,8 @@ export function loadSettingsFromEnv(): PtcSettings {
     allowUnsandboxedSubprocess: parseBooleanEnv(process.env.PTC_ALLOW_UNSANDBOXED_SUBPROCESS, false),
     debugLogging: parseBooleanEnv(process.env.PTC_DEBUG, false),
     autoRoute: parseBooleanEnv(process.env.PTC_AUTO_ROUTE, true),
+    autoRecover: parseBooleanEnv(process.env.PTC_AUTO_RECOVER, false),
+    autoRecoverMaxAttempts: parseClampedIntEnv(process.env.PTC_AUTO_RECOVER_MAX_ATTEMPTS, 1, 0, 1),
     trustedReadOnlyTools: parseListEnv(process.env.PTC_TRUSTED_READ_ONLY_TOOLS),
     callableTools: parseListEnv(process.env.PTC_CALLABLE_TOOLS),
     blockedTools: parseListEnv(process.env.PTC_BLOCKED_TOOLS),

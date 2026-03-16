@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "category": "functional",
+      "description": "A single user request tracks bounded PTC recovery state and can never exceed one automatic recovery attempt.",
+      "steps": [
+        "Trigger a qualifying async-wrapper failure on the first code_execution attempt.",
+        "Verify request-scoped state records the first failure and allows at most one automatic recovery attempt.",
+        "Start a new user request and verify recovery state is reset to a clean baseline."
+      ],
+      "passes": true,
+      "regression_notes": ""
+    },
+    {
+      "category": "functional",
+      "description": "Async-only code_execution failures are classified deterministically and produce a minimal corrective recovery prompt.",
+      "steps": [
+        "Feed representative failure inputs for missing-await and async-wrapper-iterated errors into the classifier.",
+        "Verify unrelated SyntaxError and NameError inputs classify to null.",
+        "Verify each supported failure class maps to one stable, minimal recovery prompt."
+      ],
+      "passes": false,
+      "regression_notes": ""
+    },
+    {
+      "category": "functional",
+      "description": "The request lifecycle integrates async-only auto-recovery without rewriting code, changing user intent, or broadening file-selection semantics.",
+      "steps": [
+        "Run a prompt that triggers an eligible async-wrapper failure and verify the next turn receives only the targeted corrective append.",
+        "Verify no second automatic recovery append occurs on a second failure in the same request.",
+        "Verify literal zero-match path cases do not trigger auto-recovery in the initial implementation."
+      ],
+      "passes": false,
+      "regression_notes": ""
+    },
+    {
+      "category": "functional",
+      "description": "Ephemeral request telemetry and code_execution result metadata expose routing, recovery, and terminal-state details without introducing a persistent sink.",
+      "steps": [
+        "Execute a recovered request and inspect tool result details for routing and recovery metadata.",
+        "Execute a non-recovered request and verify telemetry still records first-path, attempt count, and terminal state.",
+        "Verify no new persistent telemetry artifact is written outside benchmark result files."
+      ],
+      "passes": false,
+      "regression_notes": ""
+    },
+    {
+      "category": "functional",
+      "description": "A JSON eval corpus under .pi/evals/ptc can define routing and recovery expectations deterministically.",
+      "steps": [
+        "Create JSON eval case files for positive PTC routing, negative direct routing, mutation negative controls, and async recovery scenarios.",
+        "Validate each case against the documented schema and required fields.",
+        "Verify malformed case files fail validation deterministically."
+      ],
+      "passes": false,
+      "regression_notes": ""
+    },
+    {
+      "category": "functional",
+      "description": "A benchmark runner emits deterministic JSON result records for each eval case and provider-model run.",
+      "steps": [
+        "Run the benchmark runner against a seeded eval subset for at least one configured model.",
+        "Verify each result record includes case_id, observed_first_path, success, recovery_attempted, failure_class, total_tokens, and duration_ms.",
+        "Verify baseline comparison reports routing or recovery regressions without mutating source planning docs."
+      ],
+      "passes": false,
+      "regression_notes": ""
+    },
+    {
+      "category": "functional",
+      "description": "Regression tests block unsafe routing and recovery behavior changes.",
+      "steps": [
+        "Run unit tests for routing classification, recovery classification, prompt generation, and max-attempt clamping.",
+        "Run integration tests proving one recovery attempt maximum, mutation prompt exclusion, and per-request state reset.",
+        "Verify the full repository test suite passes after the new coverage is added."
+      ],
+      "passes": false,
+      "regression_notes": ""
+    },
+    {
+      "category": "functional",
+      "description": "User-facing documentation explains the bounded async-only recovery model and JSON eval workflow accurately.",
+      "steps": [
+        "Update the relevant documentation files after implementation behavior is stable.",
+        "Verify the docs describe async-only recovery scope, ephemeral telemetry, and JSON eval artifacts correctly.",
+        "Verify documentation changes do not claim native Anthropic protocol parity or unsupported recovery behaviors."
+      ],
+      "passes": false,
+      "regression_notes": ""
+    }
+  ]
+}
