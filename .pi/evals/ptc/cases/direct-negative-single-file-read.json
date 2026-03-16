@@ -1,0 +1,12 @@
+{
+  "id": "direct-negative-single-file-read",
+  "prompt": "Read package.json and tell me the current version.",
+  "expected_first_path": "direct",
+  "acceptance": {
+    "type": "behavioral",
+    "rules": [
+      "observed_first_path=direct",
+      "success=true"
+    ]
+  }
+}

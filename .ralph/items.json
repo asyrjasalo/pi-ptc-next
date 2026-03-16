@@ -53,7 +53,7 @@
         "Validate each case against the documented schema and required fields.",
         "Verify malformed case files fail validation deterministically."
       ],
-      "passes": false,
+      "passes": true,
       "regression_notes": ""
     },
     {

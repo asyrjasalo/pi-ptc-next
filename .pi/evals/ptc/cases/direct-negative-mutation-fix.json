@@ -1,0 +1,12 @@
+{
+  "id": "direct-negative-mutation-fix",
+  "prompt": "Fix the failing tests in src/index.ts and update the docs.",
+  "expected_first_path": "direct",
+  "acceptance": {
+    "type": "behavioral",
+    "rules": [
+      "observed_first_path=direct",
+      "recovery_attempted=false"
+    ]
+  }
+}

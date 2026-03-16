@@ -1,0 +1,14 @@
+{
+  "id": "recovery-async-wrapper-iterated",
+  "prompt": "Use Python to glob test/**/*.ts, sort the matches, and return the first five file names as compact JSON only.",
+  "expected_first_path": "code_execution",
+  "acceptance": {
+    "type": "behavioral",
+    "rules": [
+      "observed_first_path=code_execution",
+      "recovery_attempted=true",
+      "failure_class=async-wrapper-iterated",
+      "success=true"
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "recovery-missing-await",
+  "prompt": "Use Python to read package.json, extract the package name and scripts keys, and return compact JSON only.",
+  "expected_first_path": "code_execution",
+  "acceptance": {
+    "type": "behavioral",
+    "rules": [
+      "observed_first_path=code_execution",
+      "recovery_attempted=true",
+      "failure_class=missing-await",
+      "success=true"
+    ]
+  }
+}

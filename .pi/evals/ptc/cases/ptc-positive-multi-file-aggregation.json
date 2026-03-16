@@ -1,0 +1,13 @@
+{
+  "id": "ptc-positive-multi-file-aggregation",
+  "prompt": "Find the top 5 most imported packages across all TypeScript files in src and return compact JSON only.",
+  "expected_first_path": "code_execution",
+  "acceptance": {
+    "type": "behavioral",
+    "rules": [
+      "observed_first_path=code_execution",
+      "success=true",
+      "output_json=true"
+    ]
+  }
+}
