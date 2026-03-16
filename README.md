@@ -77,6 +77,8 @@ This implementation now focuses on provider-agnostic reliability:
 - Added nested execution metrics such as nested tool count and estimated avoided tokens
 - Added bounded concurrency helper utilities in Python
 - Added `ptc.read_tree(...)` for deterministic find+read workflows
+- Added bounded async-only auto-recovery for common first-attempt async wrapper mistakes
+- Added deterministic JSON eval cases and a local benchmark runner for routing/recovery checks
 
 ## Available Python functions
 
@@ -205,9 +207,12 @@ If a custom tool is marked code-execution-only, `pi-ptc-next` will register it b
 - `PTC_ALLOW_MUTATIONS=true` — allow mutating tools from Python
 - `PTC_ALLOW_BASH=true` — allow `bash` from Python
 - `PTC_AUTO_ROUTE=true` — auto-route repo-wide analysis prompts toward `code_execution` (default: true)
+- `PTC_AUTO_RECOVER=true` — enable one bounded async-only recovery hint after a qualifying first-attempt `code_execution` failure (default: false)
+- `PTC_AUTO_RECOVER_MAX_ATTEMPTS=1` — bounded recovery cap; values above `1` are clamped back to `1`
 - `PTC_TRUSTED_READ_ONLY_TOOLS=query_db,fetch_metadata` — allowlisted custom tools treated as read-only when mutations are disabled
 - `PTC_CALLABLE_TOOLS=read,glob,find,grep,ls` — explicit allowlist override
 - `PTC_BLOCKED_TOOLS=bash,write` — explicit denylist override
+- `PTC_EVALS_PATH=.pi/evals/ptc` — override the JSON eval/benchmark root used by the benchmark runner
 
 ## How it works
 
@@ -338,7 +343,64 @@ Important practical points:
   - prompt-time auto-routing for requests that look like clear PTC fits
 - Auto-routing is deliberately conservative and avoids prompts that look like editing or implementation tasks.
 
+### Bounded async-only recovery
+
+Optional recovery is intentionally narrow.
+
+- Enable it with `PTC_AUTO_RECOVER=true`.
+- Recovery only applies to `code_execution` failures that clearly come from using async helpers like `read`, `glob`, `find`, `grep`, or `ls` without `await`.
+- The extension appends one deterministic corrective hint on the next turn and allows at most one automatic recovery attempt per user request.
+- Mutation prompts are ineligible, and the initial implementation does not broaden literal path semantics or auto-recover zero-match path cases.
+- Recovery metadata is additive only: successful `code_execution` results include `details.telemetry` and `details.recovery`, but no persistent telemetry sink is written outside benchmark result files.
+
 For the deeper technical explanation and research notes, see [`docs/PTC-RESEARCH.md`](docs/PTC-RESEARCH.md).
+
+## Deterministic JSON evals and benchmarks
+
+Seeded eval cases live under `.pi/evals/ptc/cases` and use stable JSON files:
+
+```json
+{
+  "id": "recovery-missing-await",
+  "prompt": "Use Python to read package.json and return compact JSON only.",
+  "expected_first_path": "code_execution",
+  "acceptance": {
+    "type": "behavioral",
+    "rules": [
+      "observed_first_path=code_execution",
+      "recovery_attempted=true",
+      "failure_class=missing-await",
+      "success=true"
+    ]
+  }
+}
+```
+
+Current seeded buckets cover:
+
+- positive repo-wide PTC routing
+- negative direct single-file routing
+- mutation-prompt negative controls
+- async recovery cases for `missing-await` and `async-wrapper-iterated`
+
+Build first, then run the benchmark CLI directly from `dist`:
+
+```bash
+npm run build
+node dist/run-benchmarks.js \
+  --provider local \
+  --model seeded \
+  --evals-path .pi/evals/ptc \
+  --cases recovery-missing-await
+```
+
+Useful flags:
+
+- `--results-path <file>` to write a specific JSON result file
+- `--baseline <file>` to compare against a saved baseline without changing source planning docs
+- `--timestamp <iso>` for deterministic output paths in CI or local comparisons
+
+Each result record includes at least `case_id`, `observed_first_path`, `success`, `recovery_attempted`, `failure_class`, `total_tokens`, and `duration_ms`.
 
 ## Further reading
 

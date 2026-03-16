@@ -86,7 +86,7 @@
         "Verify the docs describe async-only recovery scope, ephemeral telemetry, and JSON eval artifacts correctly.",
         "Verify documentation changes do not claim native Anthropic protocol parity or unsupported recovery behaviors."
       ],
-      "passes": false,
+      "passes": true,
       "regression_notes": ""
     }
   ]
