@@ -1,3 +1,5 @@
+import * as path from "path";
+import * as os from "os";
 import { randomUUID } from "crypto";
 import { execSync, spawn } from "child_process";
 import type { SandboxManager } from "./contracts/execution-types";
@@ -147,7 +149,9 @@ class DockerSandbox implements SandboxManager {
 function isDockerAvailable(): boolean {
   try {
     // Use limactl shell for macOS if docker shim is configent
-    const dockerPath = process.platform === "darwin" ? "/Users/asyrjasalo/.local/configent/bin/docker" : "docker";
+    const dockerPath = process.platform === "darwin"
+      ? path.join(os.homedir(), ".local", "configent", "bin", "docker")
+      : "docker";
     execSync(`"${dockerPath}" --version`, { stdio: "ignore" });
     return true;
   } catch {
