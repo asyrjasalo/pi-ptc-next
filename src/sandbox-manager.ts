@@ -1,5 +1,3 @@
-import * as path from "path";
-import * as os from "os";
 import { randomUUID } from "crypto";
 import { execSync, spawn } from "child_process";
 import type { SandboxManager } from "./contracts/execution-types";
@@ -8,6 +6,15 @@ import { debugLog } from "./utils";
 
 const EXECUTION_TIMEOUT = 270_000;
 const DOCKER_WORKSPACE_ROOT = "/workspace";
+
+// Resolve docker binary from PATH.
+function resolveDockerBinPath(): string {
+  try {
+    return execSync("which docker", { encoding: "utf-8" }).trim();
+  } catch {
+    return "docker";
+  }
+}
 
 class SubprocessSandbox implements SandboxManager {
   spawn(code: string, cwd: string): import("child_process").ChildProcess {
@@ -28,12 +35,15 @@ class SubprocessSandbox implements SandboxManager {
 
 class DockerSandbox implements SandboxManager {
   private containerId: string | null = null;
+  private containerCwd: string | null = null;
   private lastUsed = 0;
   private readonly sessionId: string;
   private cleanupInterval: NodeJS.Timeout | null = null;
+  private readonly dockerBin: string;
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
+    this.dockerBin = resolveDockerBinPath();
     this.startCleanupTimer();
   }
 
@@ -60,14 +70,10 @@ class DockerSandbox implements SandboxManager {
 
     const containerId = this.containerId;
     this.containerId = null;
+    this.containerCwd = null;
 
     try {
-      // Use limactl shell for macOS if docker shim is configent
-      if (process.platform === "darwin") {
-        execSync(`limactl shell default docker stop ${containerId}`, { stdio: "ignore" });
-      } else {
-        execSync(`docker stop ${containerId}`, { stdio: "ignore" });
-      }
+      execSync(`"${this.dockerBin}" stop ${containerId}`, { stdio: "ignore" });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("No such container") || message.includes("is not running")) {
@@ -78,35 +84,30 @@ class DockerSandbox implements SandboxManager {
   }
 
   private ensureContainer(cwd: string): void {
-    if (this.containerId && Date.now() - this.lastUsed <= EXECUTION_TIMEOUT) {
+    const expired = Date.now() - this.lastUsed > EXECUTION_TIMEOUT;
+    const cwdChanged = this.containerCwd !== null && this.containerCwd !== cwd;
+    if (this.containerId && !expired && !cwdChanged) {
       return;
+    }
+
+    if (cwdChanged) {
+      debugLog("cwd changed, restarting container", { old: this.containerCwd, new: cwd });
     }
 
     this.stopContainerNow();
 
     const containerName = `pi-ptc-${this.sessionId}-${Date.now()}`;
-    let output: string;
-    if (process.platform === "darwin") {
-      // Use limactl shell for macOS if docker shim is configent
-      output = execSync(
-        `limactl shell default docker run -d --rm --network none --name ${containerName} ` +
-        `-v "${cwd}:${DOCKER_WORKSPACE_ROOT}:ro" ` +
-        `-w ${DOCKER_WORKSPACE_ROOT} ` +
-        `--memory 512m --cpus 1.0 ` +
-        `python:3.12-slim tail -f /dev/null`,
-        { encoding: "utf-8" }
-      );
-    } else {
-      output = execSync(
-        `docker run -d --rm --network none --name ${containerName} ` +
-        `-v "${cwd}:${DOCKER_WORKSPACE_ROOT}:ro" ` +
-        `-w ${DOCKER_WORKSPACE_ROOT} ` +
-        `--memory 512m --cpus 1.0 ` +
-        `python:3.12-slim tail -f /dev/null`,
-        { encoding: "utf-8" }
-      );
-    }
+    const output = execSync(
+      `"${this.dockerBin}" run -d --rm --network none --name ${containerName} ` +
+      `-v "${cwd}:${DOCKER_WORKSPACE_ROOT}:ro" ` +
+      `-w ${DOCKER_WORKSPACE_ROOT} ` +
+      `--memory 512m --cpus 1.0 ` +
+      `python:3.12-slim tail -f /dev/null`,
+      { encoding: "utf-8" }
+    );
     this.containerId = output.trim();
+    this.containerCwd = cwd;
+    debugLog("Started Docker container", { containerId: this.containerId, cwd });
   }
 
   spawn(code: string, cwd: string): import("child_process").ChildProcess {
@@ -114,15 +115,10 @@ class DockerSandbox implements SandboxManager {
       this.ensureContainer(cwd);
       this.lastUsed = Date.now();
 
-      // Pipe code via stdin to avoid configent shim interpreting -c code through bash
-      // Use limactl shell for macOS if docker shim is configent
-      let dockerCmd: string[];
-      if (process.platform === "darwin") {
-        dockerCmd = ["limactl", "shell", "default", "docker", "exec", "-i", "-w", DOCKER_WORKSPACE_ROOT, this.containerId as string, "python3", "-u"];
-      } else {
-        dockerCmd = ["docker", "exec", "-i", "-w", DOCKER_WORKSPACE_ROOT, this.containerId as string, "python3", "-u"];
-      }
-      const proc = spawn(dockerCmd[0], dockerCmd.slice(1), { shell: false });
+      // Pipe code via stdin. Use shell:true so the docker shim (a shell
+      // script) is executed through the system shell, not as a raw binary.
+      const cmd = `"${this.dockerBin}" exec -i -w ${DOCKER_WORKSPACE_ROOT} ${this.containerId} python3 -u`;
+      const proc = spawn(cmd, { shell: true, stdio: ["pipe", "pipe", "pipe"] });
       proc.stdin.write(code);
       proc.stdin.end();
       return proc;
@@ -148,10 +144,7 @@ class DockerSandbox implements SandboxManager {
 
 function isDockerAvailable(): boolean {
   try {
-    // Use limactl shell for macOS if docker shim is configent
-    const dockerPath = process.platform === "darwin"
-      ? path.join(os.homedir(), ".local", "configent", "bin", "docker")
-      : "docker";
+    const dockerPath = resolveDockerBinPath();
     execSync(`"${dockerPath}" --version`, { stdio: "ignore" });
     return true;
   } catch {
