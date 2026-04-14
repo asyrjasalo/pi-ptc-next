@@ -60,7 +60,12 @@ class DockerSandbox implements SandboxManager {
     this.containerId = null;
 
     try {
-      execSync(`docker stop ${containerId}`, { stdio: "ignore" });
+      // Use limactl shell for macOS if docker shim is configent
+      if (process.platform === "darwin") {
+        execSync(`limactl shell default docker stop ${containerId}`, { stdio: "ignore" });
+      } else {
+        execSync(`docker stop ${containerId}`, { stdio: "ignore" });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("No such container") || message.includes("is not running")) {
@@ -78,14 +83,27 @@ class DockerSandbox implements SandboxManager {
     this.stopContainerNow();
 
     const containerName = `pi-ptc-${this.sessionId}-${Date.now()}`;
-    const output = execSync(
-      `docker run -d --rm --network none --name ${containerName} ` +
-      `-v "${cwd}:${DOCKER_WORKSPACE_ROOT}:ro" ` +
-      `-w ${DOCKER_WORKSPACE_ROOT} ` +
-      `--memory 512m --cpus 1.0 ` +
-      `python:3.12-slim tail -f /dev/null`,
-      { encoding: "utf-8" }
-    );
+    let output: string;
+    if (process.platform === "darwin") {
+      // Use limactl shell for macOS if docker shim is configent
+      output = execSync(
+        `limactl shell default docker run -d --rm --network none --name ${containerName} ` +
+        `-v "${cwd}:${DOCKER_WORKSPACE_ROOT}:ro" ` +
+        `-w ${DOCKER_WORKSPACE_ROOT} ` +
+        `--memory 512m --cpus 1.0 ` +
+        `python:3.12-slim tail -f /dev/null`,
+        { encoding: "utf-8" }
+      );
+    } else {
+      output = execSync(
+        `docker run -d --rm --network none --name ${containerName} ` +
+        `-v "${cwd}:${DOCKER_WORKSPACE_ROOT}:ro" ` +
+        `-w ${DOCKER_WORKSPACE_ROOT} ` +
+        `--memory 512m --cpus 1.0 ` +
+        `python:3.12-slim tail -f /dev/null`,
+        { encoding: "utf-8" }
+      );
+    }
     this.containerId = output.trim();
   }
 
@@ -94,17 +112,18 @@ class DockerSandbox implements SandboxManager {
       this.ensureContainer(cwd);
       this.lastUsed = Date.now();
 
-      return spawn("docker", [
-        "exec",
-        "-i",
-        "-w",
-        DOCKER_WORKSPACE_ROOT,
-        this.containerId as string,
-        "python3",
-        "-u",
-        "-c",
-        code,
-      ]);
+      // Pipe code via stdin to avoid configent shim interpreting -c code through bash
+      // Use limactl shell for macOS if docker shim is configent
+      let dockerCmd: string[];
+      if (process.platform === "darwin") {
+        dockerCmd = ["limactl", "shell", "default", "docker", "exec", "-i", "-w", DOCKER_WORKSPACE_ROOT, this.containerId as string, "python3", "-u"];
+      } else {
+        dockerCmd = ["docker", "exec", "-i", "-w", DOCKER_WORKSPACE_ROOT, this.containerId as string, "python3", "-u"];
+      }
+      const proc = spawn(dockerCmd[0], dockerCmd.slice(1), { shell: false });
+      proc.stdin.write(code);
+      proc.stdin.end();
+      return proc;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to create/use Docker container: ${message}`);
@@ -127,7 +146,9 @@ class DockerSandbox implements SandboxManager {
 
 function isDockerAvailable(): boolean {
   try {
-    execSync("docker --version", { stdio: "ignore" });
+    // Use limactl shell for macOS if docker shim is configent
+    const dockerPath = process.platform === "darwin" ? "/Users/asyrjasalo/.local/configent/bin/docker" : "docker";
+    execSync(`"${dockerPath}" --version`, { stdio: "ignore" });
     return true;
   } catch {
     return false;
